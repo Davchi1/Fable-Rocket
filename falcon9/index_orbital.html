@@ -1,0 +1,2903 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Falcon 9 Ascent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600&family=Barlow:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<!-- ARTIFACT-STYLE-START -->
+<style>
+/* ===================================================================
+   Falcon 9 / Starlink ascent simulation - instrument furniture.
+
+   Design plan
+   -----------
+   Colour   void #04060B . ink #E9F1FA . dim #78879C . go #3FD79C
+            hot #FF7A34 (matches the plume) . wire rgba(150,180,215,.16)
+   Type     Barlow Condensed for labels and callouts (the condensed caps of
+            an engineering drawing), IBM Plex Mono for every number that has
+            to hold a column, Barlow for prose.
+   Layout   Full-bleed WebGL. The instruments float at the edges: mission
+            clock top-left with the countdown sequence beneath it, camera and
+            time-rate controls top-right, one hairline-ruled telemetry rail
+            across the bottom, event callout on the centreline.
+
+   Single theme on purpose - this is a range console over a daylit sky, and a
+   light variant would be a different instrument. Every colour is painted
+   explicitly so the page holds on any host ground.
+   =================================================================== */
+
+:root{
+  color-scheme: dark;
+
+  --void:      #04060B;
+  --panel:     rgba(6, 10, 17, 0.64);
+  --ink:       #E9F1FA;
+  --dim:       #78879C;
+  --dimmer:    #4A5666;
+  --go:        #3FD79C;
+  --hot:       #FF7A34;
+  --wire:      rgba(150, 180, 215, 0.16);
+  --wire-lit:  rgba(150, 180, 215, 0.40);
+
+  --f-disp: "Barlow Condensed", "Oswald", "Arial Narrow", system-ui, sans-serif;
+  --f-num:  "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --f-body: "Barlow", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --pad-t: env(safe-area-inset-top, 0px);
+  --pad-b: env(safe-area-inset-bottom, 0px);
+}
+
+*, *::before, *::after{ box-sizing: border-box; }
+
+html, body{ height: 100%; }
+body{
+  margin: 0;
+  background: var(--void);
+  color: var(--ink);
+  font-family: var(--f-body);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The renderer owns the whole viewport; every instrument floats above it. */
+#gl{ position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+#hud{
+  position: fixed; inset: 0;
+  pointer-events: none;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  padding: calc(14px + var(--pad-t)) 16px calc(12px + var(--pad-b));
+  gap: 8px;
+  opacity: 0;
+  transition: opacity .6s ease;
+}
+#hud.live{ opacity: 1; }
+
+/* ---------- top row ------------------------------------------------ */
+.top{
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px;
+}
+
+.clock{
+  display: grid; gap: 2px;
+  background: var(--panel);
+  border-left: 2px solid var(--hot);
+  padding: 8px 14px 10px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.clock .t{
+  font-family: var(--f-num); font-weight: 500;
+  font-size: clamp(26px, 5.2vw, 40px); line-height: .96;
+  font-variant-numeric: tabular-nums; letter-spacing: -.01em;
+}
+.clock .phase{
+  font-family: var(--f-disp); font-size: 13px; font-weight: 600;
+  letter-spacing: .18em; text-transform: uppercase; color: var(--dim);
+}
+
+/* The countdown sequence is genuinely ordered, so it is drawn as a list of
+   times - the structure encodes the flight, it is not decoration. */
+.seq{
+  margin: 10px 0 0; padding: 0; list-style: none;
+  display: grid; gap: 1px; width: max-content; min-width: 210px;
+}
+.seq li{
+  display: grid; grid-template-columns: 62px 1fr; align-items: baseline;
+  gap: 10px; padding: 3px 14px 3px 12px;
+  background: rgba(6, 10, 17, 0.44);
+  border-left: 2px solid transparent;
+  color: var(--dimmer);
+  transition: color .35s ease, border-color .35s ease, background .35s ease;
+}
+.seq li .at{
+  font-family: var(--f-num); font-size: 11px; font-variant-numeric: tabular-nums;
+}
+.seq li .nm{
+  font-family: var(--f-disp); font-size: 13px; letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.seq li.done{ color: var(--dim); border-left-color: var(--wire-lit); }
+.seq li.now{
+  color: var(--ink); border-left-color: var(--go);
+  background: rgba(63, 215, 156, 0.10);
+}
+
+.controls{ display: grid; gap: 6px; justify-items: end; pointer-events: auto; }
+.row{ display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.tag{
+  font-family: var(--f-disp); font-size: 11px; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--dimmer); margin-right: 4px;
+}
+button{
+  font-family: var(--f-disp); font-size: 13px; letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--dim); background: var(--panel); border: 1px solid var(--wire);
+  padding: 5px 10px; cursor: pointer;
+  transition: color .2s, border-color .2s, background .2s;
+}
+button:hover{ color: var(--ink); border-color: var(--wire-lit); }
+button.on{ color: var(--void); background: var(--ink); border-color: var(--ink); }
+button:focus-visible{ outline: 2px solid var(--go); outline-offset: 2px; }
+
+/* ---------- centre: event callout ---------------------------------- */
+.stage-mid{ display: grid; place-items: center; }
+#callout{
+  font-family: var(--f-disp); font-weight: 600;
+  font-size: clamp(22px, 5vw, 44px); letter-spacing: .26em;
+  text-transform: uppercase; text-align: center;
+  color: var(--ink);
+  text-shadow: 0 0 28px rgba(4, 6, 11, .95), 0 2px 10px rgba(4, 6, 11, .9);
+  opacity: 0; transform: scale(.96);
+  transition: opacity .3s ease, transform .5s cubic-bezier(.16,1,.3,1);
+  padding: 0 16px;
+}
+#callout.show{ opacity: 1; transform: scale(1); }
+#callout.hot{ color: var(--hot); }
+
+/* ---------- bottom: telemetry rail --------------------------------- */
+.rail{
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  background: var(--panel);
+  border-top: 1px solid var(--wire);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.cell{ padding: 7px 12px 9px; border-left: 1px solid var(--wire); min-width: 0; }
+.cell:first-child{ border-left: 0; }
+.cell .k{
+  font-family: var(--f-disp); font-size: 10px; letter-spacing: .2em;
+  text-transform: uppercase; color: var(--dim); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.cell .v{
+  font-family: var(--f-num); font-size: clamp(14px, 2.3vw, 20px);
+  font-variant-numeric: tabular-nums; line-height: 1.25; white-space: nowrap;
+}
+.cell .v u{ font-size: .62em; color: var(--dim); text-decoration: none; margin-left: 3px; }
+
+/* Throttle reads as a segmented meter as well as a number: state in form,
+   not only in digits. */
+.meter{ display: flex; gap: 2px; margin-top: 5px; height: 6px; }
+.meter i{ flex: 1; background: rgba(150,180,215,.14); }
+.meter i.lit{ background: var(--hot); }
+
+/* ---------- start card --------------------------------------------- */
+#start{
+  position: fixed; inset: 0; z-index: 5;
+  display: grid; place-items: center;
+  background: radial-gradient(120% 90% at 50% 40%, rgba(4,6,11,.72), rgba(4,6,11,.96));
+  padding: calc(24px + var(--pad-t)) 16px calc(24px + var(--pad-b));
+  transition: opacity .7s ease;
+}
+#start.gone{ opacity: 0; pointer-events: none; }
+.card{ max-width: 460px; width: 100%; }
+.eyebrow{
+  font-family: var(--f-disp); font-size: 12px; letter-spacing: .32em;
+  text-transform: uppercase; color: var(--hot); margin-bottom: 6px;
+}
+.card h1{
+  font-family: var(--f-disp); font-weight: 500;
+  font-size: clamp(38px, 10vw, 66px); line-height: .92; margin: 0 0 14px;
+  letter-spacing: .01em; text-wrap: balance;
+}
+.card p{
+  margin: 0 0 20px; font-size: 15px; line-height: 1.55; color: var(--dim);
+  max-width: 52ch;
+}
+#go{
+  font-size: 17px; letter-spacing: .24em; padding: 12px 30px;
+  color: var(--void); background: var(--hot); border-color: var(--hot);
+}
+#go:hover{ background: #ff9152; border-color: #ff9152; color: var(--void); }
+.keys{
+  margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--wire);
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px 20px;
+}
+.keys div{ font-size: 13px; color: var(--dimmer); }
+.keys b{
+  font-family: var(--f-num); font-weight: 500; font-size: 12px;
+  color: var(--dim); margin-right: 8px;
+}
+#err{
+  font-family: var(--f-num); font-size: 13px; line-height: 1.6;
+  color: var(--hot); margin-top: 18px;
+}
+
+/* ---------- narrow screens ----------------------------------------- */
+@media (max-width: 760px){
+  .seq{ display: none; }
+  .rail{ grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .cell:nth-child(5){ border-left: 0; }
+  .cell:nth-child(n+5){ border-top: 1px solid var(--wire); }
+}
+@media (max-width: 430px){
+  .rail{ grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .cell:nth-child(4){ border-left: 0; }
+  .cell:nth-child(n+4){ border-top: 1px solid var(--wire); }
+  .cell:nth-child(7){ display: none; }
+}
+@media (prefers-reduced-motion: reduce){
+  #callout, #hud, #start{ transition-duration: .01ms; }
+}
+</style>
+<!-- ARTIFACT-STYLE-END -->
+</head>
+<body>
+<!-- ARTIFACT-BODY-START -->
+<canvas id="gl"></canvas>
+
+<div id="hud">
+  <div class="top">
+    <div>
+      <div class="clock">
+        <div class="t" id="met">T&minus;00:00:10</div>
+        <div class="phase" id="phase">Terminal count</div>
+      </div>
+      <ul class="seq" id="seq"></ul>
+    </div>
+    <div class="controls">
+      <div class="row">
+        <span class="tag">Cam</span>
+        <button data-cam="0" class="on">Auto</button>
+        <button data-cam="1">Pad</button>
+        <button data-cam="2">Track</button>
+        <button data-cam="3">Chase</button>
+        <button data-cam="4">Onboard</button>
+        <button data-cam="5">Free</button>
+      </div>
+      <div class="row">
+        <span class="tag">Rate</span>
+        <button data-rate="0.25">&frac14;&times;</button>
+        <button data-rate="1" class="on">1&times;</button>
+        <button data-rate="4">4&times;</button>
+        <button data-rate="16">16&times;</button>
+        <button id="reset">Reset</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="stage-mid"><div id="callout"></div></div>
+
+  <div class="rail">
+    <div class="cell"><div class="k">Altitude</div><div class="v" id="alt">0<u>m</u></div></div>
+    <div class="cell"><div class="k">Speed</div><div class="v" id="spd">0<u>km/h</u></div></div>
+    <div class="cell"><div class="k">Downrange</div><div class="v" id="dr">0<u>km</u></div></div>
+    <div class="cell"><div class="k">Mach</div><div class="v" id="mach">0.00</div></div>
+    <div class="cell"><div class="k">Dyn&nbsp;pressure</div><div class="v" id="qbar">0<u>kPa</u></div></div>
+    <div class="cell">
+      <div class="k">Throttle</div><div class="v" id="thr">0<u>%</u></div>
+      <div class="meter" id="meter"></div>
+    </div>
+    <div class="cell"><div class="k">Axial&nbsp;load</div><div class="v" id="gee">0.00<u>g</u></div></div>
+  </div>
+</div>
+
+<div id="start">
+  <div class="card">
+    <div class="eyebrow">LC&#8209;39A &middot; Starlink Group 6&#8209;41</div>
+    <h1>Falcon&nbsp;9 Ascent</h1>
+    <p>A procedural Falcon&nbsp;9 flown on a continuous physics integration &mdash;
+       549&nbsp;t off the pad, nine Merlins at 7.6&nbsp;MN, an exponential
+       atmosphere, Mach&#8209;dependent drag and a gravity turn. Ignition holds
+       two seconds on the clamps before release.</p>
+    <button id="go">Start count</button>
+    <div class="keys">
+      <div><b>Space</b>Start / hold</div>
+      <div><b>1&ndash;5</b>Camera</div>
+      <div><b>0</b>Auto&#8209;director</div>
+      <div><b>&minus; =</b>Time rate</div>
+      <div><b>Drag</b>Look around</div>
+      <div><b>R</b>Reset to T&minus;10</div>
+    </div>
+    <div id="err" hidden></div>
+  </div>
+</div>
+<!-- ARTIFACT-BODY-END -->
+
+<!-- ARTIFACT-SCRIPT-START -->
+<script type="module">
+/* ====================================================================
+   FALCON 9 / STARLINK - procedural ascent simulation
+   --------------------------------------------------------------------
+   Everything below is generated at runtime: no meshes, no textures and
+   no images are loaded. The only network fetch is the three.js module
+   itself.
+
+   Layout of this file
+     0  module loader
+     1  constants: vehicle geometry, mass/thrust, atmosphere
+     2  small maths kit (noise, easing, table interpolation)
+     3  renderer, scene, lighting
+     4  sky dome (custom gradient + sun + stars shader)
+     5  terrain and the concrete pad (procedural canvas textures)
+     6  pad structures: mount, flame deflector, strongback, masts
+     7  the vehicle: booster, legs, grid fins, interstage, stage 2, fairing
+     8  exhaust: one premultiplied-alpha particle system + a shock-cell jet
+     9  flight dynamics: the integrator and the guidance/throttle programme
+    10  camera director + procedural shake
+    11  HUD binding and the main loop
+   ==================================================================== */
+
+/* -- 0 -- module loader ---------------------------------------------
+   Three.js is pulled as an ES module from a CDN, so the page runs from
+   a file:// URL with no build step. Two mirrors of the same major are
+   tried before giving up, and the failure is reported in the UI rather
+   than dying silently in the console.                                */
+const CDN_SOURCES = [
+  'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js',
+  'https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js',
+  'https://cdn.jsdelivr.net/npm/three@0.159.0/build/three.module.js'
+];
+
+let THREE = null;
+let loadError = null;
+for (const url of CDN_SOURCES) {
+  try { THREE = await import(url); break; }
+  catch (err) { loadError = err; }
+}
+
+const $ = (id) => document.getElementById(id);
+
+if (!THREE) {
+  const box = $('err');
+  box.hidden = false;
+  box.textContent =
+    'Could not load three.js from the CDN (' + (loadError && loadError.message) + '). ' +
+    'Check the network, or serve this folder over HTTP: python3 -m http.server 8000';
+  $('go').disabled = true;
+  throw new Error('three.js unavailable');
+}
+
+const { Vector3, Vector2, Quaternion, Euler, Color, Matrix4 } = THREE;
+
+/* -- 1 -- constants --------------------------------------------------
+   Real Falcon 9 Block 5 figures. Distances are metres, masses kilograms,
+   forces newtons, and one world unit is one metre throughout.        */
+
+/* Station line: every part of the vehicle is authored at its true height
+   above the engine gimbal plane, so the stack assembles itself.       */
+const V = {
+  R:            1.83,   // core radius, 3.66 m diameter
+  ENGINE_BAY:   3.20,   // octaweb / thrust structure top
+  S1_TOP:      40.00,   // top of the first-stage LOX tank
+  INTER_TOP:   46.00,   // top of the black composite interstage
+  S2_TOP:      57.00,   // top of the second stage
+  FAIR_R:       2.60,   // 5.2 m fairing diameter
+  FAIR_SHOULD: 59.60,   // fairing shoulder: the taper ends here
+  FAIR_CYL:    65.10,   // top of the fairing barrel section
+  TOP:         70.00    // nose cap
+};
+
+const P = {
+  g0:      9.80665,     // standard gravity
+  Re:   6371000,        // mean Earth radius, for the inverse-square falloff
+  H:       8500,        // atmospheric scale height (m)
+  rho0:    1.225,       // sea-level density (kg/m^3)
+  p0:    101325,        // sea-level pressure (Pa)
+
+  /* Stage 1: nine Merlin 1D engines. */
+  m1_dry:   25600, m1_prop: 411000,
+  T1_sl:  7607000, T1_vac: 8227000,
+  isp1_sl:    282, isp1_vac:  311,
+
+  /* Stage 2: one Merlin Vacuum. */
+  m2_dry:    3900, m2_prop: 107500,
+  T2_vac:  981000, isp2_vac:  348,
+
+  payload:  17400,      // ~56 Starlink v2 mini plus the dispenser stack
+  fairing:    1900,     // both halves
+
+  A_core: Math.PI * 1.83 * 1.83,   // 10.5 m^2 reference area, bare core
+  A_fair: Math.PI * 2.60 * 2.60,   // 21.2 m^2 while the fairing is on
+
+  G_LIMIT: 4.2          // axial load the guidance holds the stack under
+};
+
+/* Propellant flow follows straight from thrust and specific impulse:
+   mdot = F / (Isp * g0).  ~2751 kg/s for nine Merlins at sea level.   */
+P.mdot1 = P.T1_sl / (P.isp1_sl * P.g0);
+P.mdot2 = P.T2_vac / (P.isp2_vac * P.g0);
+P.m0 = P.m1_dry + P.m1_prop + P.m2_dry + P.m2_prop + P.payload + P.fairing;
+
+/* Speed of sound against geometric altitude (US Standard Atmosphere,
+   sampled at the layer boundaries; linear between them). */
+const SOS_TABLE = [
+  [0, 340.3], [11000, 295.1], [20000, 295.1], [32000, 303.1],
+  [47000, 329.8], [51000, 329.8], [71000, 295.1], [86000, 274.1]
+];
+
+/* Drag coefficient against Mach for a slender launch vehicle: the
+   transonic rise near M 1.05, then the steady supersonic decay.       */
+const CD_TABLE = [
+  [0, 0.30], [0.60, 0.30], [0.90, 0.42], [1.05, 0.62], [1.30, 0.57],
+  [2.00, 0.41], [3.00, 0.31], [5.00, 0.25], [10.0, 0.21]
+];
+
+/* Open-loop throttle schedule (seconds after release -> fraction).
+   The bucket through 38-74 s is the real load-relief throttle-down that
+   carries the vehicle through max dynamic pressure. */
+const THROTTLE_TABLE = [
+  [0, 1.00], [30, 1.00], [38, 0.72], [62, 0.72], [76, 1.00], [200, 1.00]
+];
+
+const SEQUENCE = [
+  { t:  -2.0, key: 'ignition', label: 'Engine ignition' },
+  { t:   0.0, key: 'liftoff',  label: 'Liftoff' },
+  { t:  12.0, key: 'pitch',    label: 'Pitch / roll program' },
+  { t:  null, key: 'maxq',     label: 'Max Q' },
+  { t:  null, key: 'meco',     label: 'MECO' },
+  { t:  null, key: 'sep',      label: 'Stage separation' },
+  { t:  null, key: 'ses1',     label: 'SES-1' },
+  { t:  null, key: 'fairing',  label: 'Fairing deploy' },
+  { t:  null, key: 'seco',     label: 'SECO-1' }
+];
+
+/* -- 2 -- maths kit --------------------------------------------------- */
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
+const lerp  = (a, b, t) => a + (b - a) * t;
+const invLerp = (a, b, v) => (v - a) / (b - a);
+const smoothstep = (a, b, v) => { const t = clamp(invLerp(a, b, v), 0, 1); return t * t * (3 - 2 * t); };
+const damp = (a, b, lambda, dt) => lerp(a, b, 1 - Math.exp(-lambda * dt));
+const rand = (a, b) => a + Math.random() * (b - a);
+
+/* Linear interpolation across a sorted [x, y] table. */
+function tableLookup(table, x) {
+  if (x <= table[0][0]) return table[0][1];
+  const n = table.length;
+  if (x >= table[n - 1][0]) return table[n - 1][1];
+  for (let i = 1; i < n; i++) {
+    if (x <= table[i][0]) {
+      const [x0, y0] = table[i - 1], [x1, y1] = table[i];
+      return lerp(y0, y1, (x - x0) / (x1 - x0));
+    }
+  }
+  return table[n - 1][1];
+}
+
+/* Deterministic 1-D value noise. Integer lattice hashed to [-1, 1] and
+   smoothstep-interpolated; three octaves give the camera a shake that
+   reads as mechanical rather than as white noise. */
+function hash1(n) {
+  n = (n << 13) ^ n;
+  return 1.0 - ((n * (n * n * 15731 + 789221) + 1376312589) & 0x7fffffff) / 1073741824.0;
+}
+function vnoise(x) {
+  const i = Math.floor(x), f = x - i;
+  const u = f * f * (3 - 2 * f);
+  return hash1(i) * (1 - u) + hash1(i + 1) * u;
+}
+function fbm(x) {
+  return vnoise(x) * 0.54 + vnoise(x * 2.13 + 17.3) * 0.29 + vnoise(x * 4.61 + 41.7) * 0.17;
+}
+
+/* Atmosphere: an isothermal exponential model. Density and pressure both
+   fall as exp(-h / H), which is accurate enough through the troposphere
+   and stratosphere to put max Q where it really happens (~12 km). */
+const density  = (h) => h > 90000 ? 0 : P.rho0 * Math.exp(-h / P.H);
+const pressure = (h) => h > 90000 ? 0 : P.p0  * Math.exp(-h / P.H);
+/* Inverse-square gravity - by 200 km it has already dropped 6%. */
+const gravity  = (h) => P.g0 * Math.pow(P.Re / (P.Re + h), 2);
+
+/* Procedural canvas textures. Nothing is fetched; every surface detail
+   below is drawn with 2-D canvas calls and uploaded as a CanvasTexture. */
+function makeCanvas(size) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  return { c, g: c.getContext('2d') };
+}
+function asTexture(canvas, repeat) {
+  const t = new THREE.CanvasTexture(canvas);
+  if ('colorSpace' in t) t.colorSpace = THREE.SRGBColorSpace;
+  if (repeat) {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(repeat, repeat);
+  }
+  return t;
+}
+
+/* -- 3 -- renderer, scene, lighting ---------------------------------- */
+const canvas = $('gl');
+const renderer = new THREE.WebGLRenderer({
+  canvas, antialias: true, stencil: false, powerPreference: 'high-performance'
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setSize(window.innerWidth, window.innerHeight, false);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+if ('outputColorSpace' in renderer) renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const scene = new THREE.Scene();
+scene.background = new Color(0x8fb4d6);
+
+/* A 24-bit depth buffer distributes precision hyperbolically, so a near
+   plane of 0.5 m keeps millimetre resolution around the pad - the only
+   place in this scene where surfaces are close enough to fight - while
+   the far plane still reaches past the sky dome. */
+const camera = new THREE.PerspectiveCamera(32, window.innerWidth / window.innerHeight, 0.5, 200000);
+camera.position.set(72, 26, 88);
+
+/* Sun placed low enough to rim-light the vehicle down one side. */
+const SUN_DIR = new Vector3(0.50, 0.56, 0.66).normalize();
+
+const hemi = new THREE.HemisphereLight(0xa6c9ea, 0x574f43, 0.85);
+scene.add(hemi);
+
+const sun = new THREE.DirectionalLight(0xfff1dc, 2.7);
+sun.position.copy(SUN_DIR).multiplyScalar(400);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.near = 20;
+sun.shadow.camera.far = 900;
+sun.shadow.camera.left = -150; sun.shadow.camera.right = 150;
+sun.shadow.camera.top = 190;   sun.shadow.camera.bottom = -40;
+sun.shadow.bias = -0.0006;
+sun.shadow.normalBias = 0.7;
+scene.add(sun);
+scene.add(sun.target);
+
+scene.add(new THREE.AmbientLight(0x35465c, 0.5));
+
+/* Engine light. A shadow-casting point light is six render passes, so it
+   is switched off the moment the vehicle is too high for its shadows to
+   land on anything - see updateEngineLight(). */
+const engineLight = new THREE.PointLight(0xffb070, 0, 420, 2);
+engineLight.castShadow = true;
+engineLight.shadow.mapSize.set(1024, 1024);
+engineLight.shadow.camera.near = 1.5;
+engineLight.shadow.camera.far = 320;
+engineLight.shadow.bias = -0.004;
+engineLight.shadow.normalBias = 0.5;
+scene.add(engineLight);
+
+/* A second, cheaper light with no shadow carries the wide orange wash
+   across the pad so the scene still reads once the shadow pass is off. */
+const glowLight = new THREE.PointLight(0xff8a3c, 0, 900, 2);
+scene.add(glowLight);
+
+const fog = new THREE.FogExp2(0xa9c6df, 0.00034);
+scene.fog = fog;
+
+/* -- 4 -- sky dome ---------------------------------------------------
+   One inverted sphere that follows the camera. The fragment shader mixes
+   a horizon-to-zenith gradient, a star field and the sun's disc plus
+   halo; the uniforms are re-driven every frame from altitude, which is
+   what turns a blue sky into the thin lit limb of an atmosphere seen
+   from above.                                                         */
+const skyUniforms = {
+  uZenith:     { value: new Color(0x2a63b8) },
+  uHorizon:    { value: new Color(0xc2d9ec) },
+  uGround:     { value: new Color(0x8d8578) },
+  uSun:        { value: SUN_DIR.clone() },
+  uSunColor:   { value: new Color(0xfff4e2) },
+  uStars:      { value: 0.0 },
+  uHaze:       { value: 1.0 },
+  uHorizonPow: { value: 0.42 }
+};
+
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(120000, 48, 32),
+  new THREE.ShaderMaterial({
+    uniforms: skyUniforms,
+    side: THREE.BackSide,
+    depthWrite: false,
+    fog: false,
+    vertexShader: `
+      varying vec3 vDir;
+      void main(){
+        vDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      precision highp float;
+      uniform vec3  uZenith, uHorizon, uGround, uSun, uSunColor;
+      uniform float uStars, uHaze, uHorizonPow;
+      varying vec3 vDir;
+
+      float h3(vec3 p){
+        return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123);
+      }
+
+      void main(){
+        vec3 d = normalize(vDir);
+
+        // Vertical gradient. uHorizonPow controls how tightly the bright
+        // band hugs the horizon: near 0.4 it is a broad daylight sky, near
+        // 6 it is the thin lit limb you see from the edge of space.
+        float t = pow(clamp(d.y, 0.0, 1.0), uHorizonPow);
+        vec3 col = mix(uHorizon, uZenith, t);
+
+        // Below the horizon line, fade into ground haze.
+        col = mix(col, uGround, smoothstep(0.0, -0.10, d.y));
+
+        // Stars: hash one candidate per cell of a quantised direction
+        // grid, then weight it with a gaussian on the in-cell offset so it
+        // resolves as a soft point instead of aliasing into a firefly.
+        if (uStars > 0.001) {
+          vec3 p = d * 320.0;
+          vec3 id = floor(p), f = fract(p) - 0.5;
+          float n = h3(id);
+          float star = smoothstep(0.974, 1.0, n) * exp(-dot(f, f) * 40.0);
+          vec3 tint = mix(vec3(0.74, 0.84, 1.0), vec3(1.0, 0.91, 0.78), h3(id + 3.1));
+          col += tint * star * uStars * 2.6;
+        }
+
+        // Sun: a hard disc wrapped in a wide forward-scattering halo that
+        // dies away with the atmosphere.
+        float sd = max(dot(d, uSun), 0.0);
+        col += uSunColor * (pow(sd, 1800.0) * 16.0 + pow(sd, 9.0) * 0.32 * uHaze);
+
+        gl_FragColor = vec4(col, 1.0);
+      }`
+  })
+);
+sky.frustumCulled = false;
+sky.renderOrder = -1;   // always laid down first; it writes colour, never depth
+scene.add(sky);
+
+const SKY_DAY_ZENITH  = new Color(0x2a63b8);
+const SKY_DAY_HORIZON = new Color(0xc6dced);
+const SKY_SPACE       = new Color(0x02030a);
+const SKY_HIGH_HORIZ  = new Color(0x1f5fa8);
+const _c1 = new Color(), _c2 = new Color();
+
+function updateSky(alt) {
+  // Fraction of the atmosphere still overhead. 26 km is a visual scale
+  // height chosen so the sky is clearly black by ~70 km.
+  const atmo = Math.exp(-Math.max(alt, 0) / 26000);
+
+  _c1.copy(SKY_SPACE).lerp(SKY_DAY_ZENITH, Math.pow(atmo, 1.25));
+  skyUniforms.uZenith.value.copy(_c1);
+
+  _c2.copy(SKY_HIGH_HORIZ).lerp(SKY_DAY_HORIZON, Math.pow(atmo, 0.55));
+  skyUniforms.uHorizon.value.copy(_c2);
+
+  skyUniforms.uHorizonPow.value = lerp(0.42, 7.0, 1 - atmo);
+  skyUniforms.uStars.value = smoothstep(16000, 62000, alt);
+  skyUniforms.uHaze.value = atmo;
+  skyUniforms.uGround.value.copy(_c2).multiplyScalar(0.62);
+
+  fog.density = 0.00034 * atmo;
+  fog.color.copy(_c2);
+  scene.background.copy(_c2);
+
+  // Sunlight loses its atmospheric warmth and softening with altitude.
+  hemi.intensity = lerp(0.18, 0.85, atmo);
+  sun.intensity = lerp(3.4, 2.7, atmo);
+}
+
+/* -- 5 -- terrain and pad surface ------------------------------------
+   Two surfaces. A 45 km disc carries the coastline as one radial canvas
+   texture (the CircleGeometry UVs map the disc onto the unit square, so a
+   radial image lines up exactly), and a 900 m concrete plane sits on top
+   of it with a tiling pad texture.                                     */
+const COAST_R = 45000;       // radius of the terrain disc
+const COAST_K = 20000 / COAST_R;  // keeps the coastline at its real distance
+
+function makeCoastTexture() {
+  const N = 768;
+  const { c, g } = makeCanvas(N);
+  const img = g.createImageData(N, N);
+  const d = img.data;
+  const half = N / 2;
+
+  // Bands are given as [outer radius (fraction of the disc), r, g, b].
+  const BANDS = [
+    [0.030 * COAST_K, 168, 166, 160],  // pad concrete
+    [0.060 * COAST_K, 122, 120, 116],  // apron and roads
+    [0.085 * COAST_K, 140, 134, 112],  // cleared ground
+    [0.200 * COAST_K,  92, 104,  74],  // coastal scrub
+    [0.255 * COAST_K, 176, 164, 132],  // dune and beach
+    [0.300 * COAST_K,  74, 128, 138],  // shallows
+    [0.560 * COAST_K,  36,  78, 108],  // shelf
+    [1.000,            22,  52,  84]   // open water
+  ];
+
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const dx = (x - half) / half, dy = (y - half) / half;
+      const r = Math.sqrt(dx * dx + dy * dy) * 0.5;
+
+      let i = 0;
+      while (i < BANDS.length - 1 && r > BANDS[i][0]) i++;
+      const band = BANDS[i];
+      const next = BANDS[Math.min(i + 1, BANDS.length - 1)];
+      // Cross-fade into the next band over the outer quarter of this one,
+      // so no boundary reads as a drawn circle from altitude.
+      const inner = i > 0 ? BANDS[i - 1][0] : 0;
+      const span = Math.max(1e-4, band[0] - inner);
+      const f = smoothstep(band[0] - span * 0.25, band[0], r);
+      const R = lerp(band[1], next[1], f);
+      const G = lerp(band[2], next[2], f);
+      const B = lerp(band[3], next[3], f);
+
+      // Break the bands up: coarse blotching plus fine grain.
+      const n = (vnoise(x * 0.055 + y * 0.31) * 0.6 + vnoise(x * 0.21 - y * 0.09) * 0.4) * 26;
+      const grain = (Math.random() - 0.5) * 11;
+
+      const o = (y * N + x) * 4;
+      d[o]     = clamp(R + n + grain, 0, 255);
+      d[o + 1] = clamp(G + n * 0.9 + grain, 0, 255);
+      d[o + 2] = clamp(B + n * 0.7 + grain, 0, 255);
+      d[o + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  return c;
+}
+
+function makeConcreteTexture() {
+  const N = 512;
+  const { c, g } = makeCanvas(N);
+  const img = g.createImageData(N, N);
+  const d = img.data;
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      // Aggregate: three noise scales stacked, plus per-pixel grit.
+      const n = vnoise(x * 0.09 + y * 0.53) * 16 +
+                vnoise(x * 0.31 - y * 0.17) * 10 +
+                vnoise(x * 1.7 + y * 2.3) * 6 +
+                (Math.random() - 0.5) * 14;
+      const v = clamp(139 + n, 0, 255);
+      const o = (y * N + x) * 4;
+      d[o] = v; d[o + 1] = v * 0.99; d[o + 2] = v * 0.95; d[o + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+
+  // Expansion joints on a 128 px grid, drawn slightly soft.
+  g.strokeStyle = 'rgba(58,56,54,0.55)';
+  g.lineWidth = 2;
+  for (let i = 0; i <= N; i += 128) {
+    g.beginPath(); g.moveTo(i, 0); g.lineTo(i, N); g.stroke();
+    g.beginPath(); g.moveTo(0, i); g.lineTo(N, i); g.stroke();
+  }
+  // A few oil and scorch stains so the tiling does not read as a grid.
+  for (let i = 0; i < 26; i++) {
+    const x = Math.random() * N, y = Math.random() * N, r = rand(8, 46);
+    const grad = g.createRadialGradient(x, y, 0, x, y, r);
+    grad.addColorStop(0, 'rgba(40,36,33,0.30)');
+    grad.addColorStop(1, 'rgba(40,36,33,0)');
+    g.fillStyle = grad;
+    g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill();
+  }
+  return c;
+}
+
+const coast = new THREE.Mesh(
+  new THREE.CircleGeometry(COAST_R, 160),
+  new THREE.MeshLambertMaterial({ map: asTexture(makeCoastTexture()) })
+);
+coast.rotation.x = -Math.PI / 2;
+coast.position.y = -0.6;
+coast.receiveShadow = false;
+scene.add(coast);
+
+const concrete = new THREE.Mesh(
+  new THREE.PlaneGeometry(900, 900),
+  new THREE.MeshStandardMaterial({
+    map: asTexture(makeConcreteTexture(), 45), roughness: 0.94, metalness: 0.0
+  })
+);
+concrete.material.map.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+concrete.rotation.x = -Math.PI / 2;
+concrete.receiveShadow = true;
+scene.add(concrete);
+
+/* Blast scorch around the trench: a soft alpha decal lifted 2 cm off the
+   deck so it never z-fights with the concrete. */
+(function addScorch() {
+  const { c, g } = makeCanvas(256);
+  const grad = g.createRadialGradient(128, 128, 10, 128, 128, 126);
+  grad.addColorStop(0.00, 'rgba(18,16,15,0.86)');
+  grad.addColorStop(0.45, 'rgba(30,27,24,0.52)');
+  grad.addColorStop(1.00, 'rgba(40,36,32,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 256, 256);
+  const tex = new THREE.CanvasTexture(c);
+  if ('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace;
+  const decal = new THREE.Mesh(
+    new THREE.CircleGeometry(78, 64),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0.9 })
+  );
+  decal.rotation.x = -Math.PI / 2;
+  decal.position.y = 0.02;
+  decal.renderOrder = 1;
+  scene.add(decal);
+})();
+
+/* -- 6 -- pad structures ---------------------------------------------
+   The truss work is built through one helper that turns a list of
+   (start, end, radius) line segments into a single InstancedMesh: the
+   whole strongback and all three lightning masts cost one draw call
+   each instead of several hundred.                                    */
+const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
+const UP = new Vector3(0, 1, 0);
+
+class Truss {
+  constructor() { this.items = []; }
+  /* ax..bz in metres, r = half-thickness of the square member. */
+  add(ax, ay, az, bx, by, bz, r) {
+    this.items.push([ax, ay, az, bx, by, bz, r]);
+    return this;
+  }
+  build(material) {
+    const n = this.items.length;
+    const mesh = new THREE.InstancedMesh(UNIT_BOX, material, n);
+    const m = new Matrix4(), q = new Quaternion();
+    const a = new Vector3(), b = new Vector3(), mid = new Vector3(), dir = new Vector3(), s = new Vector3();
+    for (let i = 0; i < n; i++) {
+      const it = this.items[i];
+      a.set(it[0], it[1], it[2]); b.set(it[3], it[4], it[5]);
+      dir.subVectors(b, a);
+      const len = dir.length();
+      if (len < 1e-5) { m.makeScale(0, 0, 0); mesh.setMatrixAt(i, m); continue; }
+      mid.addVectors(a, b).multiplyScalar(0.5);
+      // Orient the unit box's +Y axis along the member, then stretch it.
+      q.setFromUnitVectors(UP, dir.divideScalar(len));
+      s.set(it[6] * 2, len, it[6] * 2);
+      m.compose(mid, q, s);
+      mesh.setMatrixAt(i, m);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    return mesh;
+  }
+}
+
+const MAT = {
+  hull:   new THREE.MeshStandardMaterial({ color: 0xe9eaec, roughness: 0.45, metalness: 0.14 }),
+  black:  new THREE.MeshStandardMaterial({ color: 0x17181b, roughness: 0.74, metalness: 0.06 }),
+  soot:   new THREE.MeshStandardMaterial({ color: 0x2b2c30, roughness: 0.88, metalness: 0.10 }),
+  metal:  new THREE.MeshStandardMaterial({ color: 0x8e949c, roughness: 0.36, metalness: 0.86 }),
+  nozzle: new THREE.MeshStandardMaterial({ color: 0x585d64, roughness: 0.32, metalness: 0.92, side: THREE.DoubleSide }),
+  steel:  new THREE.MeshStandardMaterial({ color: 0x737a85, roughness: 0.56, metalness: 0.72 }),
+  paint:  new THREE.MeshStandardMaterial({ color: 0xb9bdc2, roughness: 0.62, metalness: 0.24 }),
+  dark:   new THREE.MeshStandardMaterial({ color: 0x14161a, roughness: 0.9,  metalness: 0.15 }),
+  copper: new THREE.MeshStandardMaterial({ color: 0x6d5236, roughness: 0.5,  metalness: 0.8 })
+};
+
+const PAD_DECK = 6.9;   // height of the launch mount deck (m)
+const clamps = [];      // hold-down arms, released at T-0
+const pad = new THREE.Group();
+scene.add(pad);
+
+function mesh(geo, mat, x, y, z) {
+  const m = new THREE.Mesh(geo, mat);
+  m.position.set(x || 0, y || 0, z || 0);
+  m.castShadow = true; m.receiveShadow = true;
+  return m;
+}
+
+/* --- launch mount: an octagonal steel table with the exhaust aperture
+   cut straight through it, built from an extruded Shape with a hole. */
+(function buildMount() {
+  const octagon = (radius, path) => {
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * TAU + Math.PI / 8;
+      const x = Math.cos(a) * radius, y = Math.sin(a) * radius;
+      if (i === 0) path.moveTo(x, y); else path.lineTo(x, y);
+    }
+    path.closePath();
+    return path;
+  };
+
+  const shape = octagon(9.4, new THREE.Shape());
+  shape.holes.push(octagon(3.6, new THREE.Path()));
+  const deckGeo = new THREE.ExtrudeGeometry(shape, { depth: 1.15, bevelEnabled: false });
+  deckGeo.rotateX(-Math.PI / 2);          // extrude along +Y instead of +Z
+  const deck = mesh(deckGeo, MAT.steel, 0, PAD_DECK - 1.15, 0);
+  pad.add(deck);
+
+  // Four splayed legs down to the concrete.
+  const legs = new Truss();
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * TAU + Math.PI / 4;
+    const cx = Math.cos(a), cz = Math.sin(a);
+    legs.add(cx * 8.0, PAD_DECK - 1.15, cz * 8.0, cx * 9.6, 0, cz * 9.6, 0.42);
+    legs.add(cx * 8.0, PAD_DECK - 3.2, cz * 8.0,
+             Math.cos(a + TAU / 4) * 8.0, PAD_DECK - 1.2, Math.sin(a + TAU / 4) * 8.0, 0.16);
+  }
+  pad.add(legs.build(MAT.steel));
+
+  // Flame deflector: two ramps meeting on a ridge, which is why the
+  // exhaust leaves the trench sideways along +/- X rather than rebounding.
+  for (const s of [-1, 1]) {
+    const ramp = mesh(new THREE.BoxGeometry(11, 0.9, 13), MAT.dark, s * 5.4, 2.1, 0);
+    ramp.rotation.z = s * 0.62;
+    pad.add(ramp);
+  }
+  // Trench mouths: dark recesses the flow pours out of.
+  for (const s of [-1, 1]) {
+    pad.add(mesh(new THREE.BoxGeometry(9, 3.2, 13.6), MAT.dark, s * 14.5, 1.4, 0));
+  }
+
+  // Hold-down clamps. Four blocks gripping the base; they swing clear the
+  // instant the count reaches zero.
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * TAU + Math.PI / 4;
+    const pivot = new THREE.Group();
+    pivot.position.set(Math.cos(a) * 4.0, PAD_DECK, Math.sin(a) * 4.0);
+    pivot.rotation.y = -a;
+    const arm = mesh(new THREE.BoxGeometry(2.3, 0.55, 0.8), MAT.metal, -1.3, 0.9, 0);
+    pivot.add(arm);
+    pivot.add(mesh(new THREE.BoxGeometry(0.8, 1.9, 1.0), MAT.steel, 0.2, 0.95, 0));
+    pad.add(pivot);
+    clamps.push(pivot);
+  }
+})();
+
+/* --- strongback (transporter-erector) ---
+   A lattice mast standing clear of the vehicle on a base hinge. It holds
+   three umbilical arms that retract at T-0, then the whole tower tips
+   back after release. */
+const strongback = new THREE.Group();
+strongback.position.set(-9.2, 0, 0);
+pad.add(strongback);
+
+const umbilicals = [];
+(function buildStrongback() {
+  const W = 1.05, D = 1.35, TOP = 63, BAY = 4.2;
+  const t = new Truss();
+  const chord = [[-D, -W], [D, -W], [D, W], [-D, W]];
+
+  for (let b = 0; b * BAY < TOP; b++) {
+    const y0 = b * BAY, y1 = Math.min(TOP, y0 + BAY);
+    for (let i = 0; i < 4; i++) {
+      const [x, z] = chord[i];
+      t.add(x, y0, z, x, y1, z, 0.13);                       // vertical chords
+      const [nx, nz] = chord[(i + 1) % 4];
+      t.add(x, y1, z, nx, y1, nz, 0.09);                     // ring at each bay
+      // Alternating diagonals: the brace flips every bay, which is what
+      // makes a real truss read as a truss and not a ladder.
+      if ((b + i) % 2 === 0) t.add(x, y0, z, nx, y1, nz, 0.075);
+      else                   t.add(nx, y0, nz, x, y1, z, 0.075);
+    }
+  }
+  strongback.add(t.build(MAT.paint));
+
+  // Hinge barrel and two hydraulic rams.
+  const hinge = mesh(new THREE.CylinderGeometry(0.85, 0.85, 3.6, 16), MAT.steel, 0, 0.9, 0);
+  hinge.rotation.x = Math.PI / 2;
+  strongback.add(hinge);
+  for (const s of [-1, 1]) {
+    const ram = mesh(new THREE.CylinderGeometry(0.4, 0.4, 9.5, 12), MAT.metal, -3.0, 5.0, s * 2.1);
+    ram.rotation.z = 0.55;
+    strongback.add(ram);
+  }
+
+  // Umbilical arms reaching across to the vehicle.
+  for (const y of [11.5, 29.0, 44.5]) {
+    const arm = new THREE.Group();
+    arm.position.set(D, y, 0);
+    const beam = mesh(new THREE.BoxGeometry(6.4, 0.7, 1.5), MAT.paint, 3.2, 0, 0);
+    arm.add(beam);
+    arm.add(mesh(new THREE.BoxGeometry(0.9, 1.5, 2.1), MAT.metal, 6.3, 0, 0));
+    // Cryogenic lines slung under the beam.
+    for (const z of [-0.45, 0.45]) {
+      const line = mesh(new THREE.CylinderGeometry(0.17, 0.17, 6.0, 8), MAT.copper, 3.2, -0.55, z);
+      line.rotation.z = Math.PI / 2;
+      arm.add(line);
+    }
+    strongback.add(arm);
+    umbilicals.push(arm);
+  }
+})();
+
+/* --- lightning masts, catenary wires, and a few ground buildings so the
+   vehicle has something to be 70 m tall next to. */
+(function buildSurroundings() {
+  const tops = [];
+  const t = new Truss();
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * TAU + 0.5;
+    const cx = Math.cos(a) * 155, cz = Math.sin(a) * 155;
+    const H = 168, S = 3.4;
+    const legsXZ = [[-S, -S], [S, -S], [S, S], [-S, S]];
+    for (let b = 0; b < 21; b++) {
+      const y0 = b * 8, y1 = y0 + 8;
+      // The mast tapers, so each bay's footprint shrinks with height.
+      const k0 = 1 - y0 / (H * 1.5), k1 = 1 - y1 / (H * 1.5);
+      for (let j = 0; j < 4; j++) {
+        const [x, z] = legsXZ[j], [nx, nz] = legsXZ[(j + 1) % 4];
+        t.add(cx + x * k0, y0, cz + z * k0, cx + x * k1, y1, cz + z * k1, 0.3);
+        t.add(cx + x * k1, y1, cz + z * k1, cx + nx * k1, y1, cz + nz * k1, 0.2);
+        if ((b + j) % 2 === 0) t.add(cx + x * k0, y0, cz + z * k0, cx + nx * k1, y1, cz + nz * k1, 0.16);
+      }
+    }
+    // Air terminal on top.
+    t.add(cx, H, cz, cx, H + 14, cz, 0.22);
+    tops.push(new Vector3(cx, H + 14, cz));
+  }
+  pad.add(t.build(MAT.paint));
+
+  // Catenary between the masts: y = a*cosh((x-x0)/a) sags by the cable's
+  // own weight. Approximated here with the parabola that matches it for
+  // shallow sag, which is visually identical at this span.
+  const wire = new THREE.LineBasicMaterial({ color: 0x2a2f36 });
+  for (let i = 0; i < 3; i++) {
+    const A = tops[i], B = tops[(i + 1) % 3];
+    const pts = [];
+    for (let k = 0; k <= 24; k++) {
+      const u = k / 24;
+      const p = A.clone().lerp(B, u);
+      p.y -= 34 * 4 * u * (1 - u);          // parabolic sag, 34 m at midspan
+      pts.push(p);
+    }
+    pad.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), wire));
+  }
+
+  // Water tower, a propellant sphere and two blockhouses.
+  const tank = mesh(new THREE.CylinderGeometry(9, 9, 22, 20), MAT.paint, -120, 27, 95);
+  pad.add(tank);
+  pad.add(mesh(new THREE.CylinderGeometry(1.1, 1.1, 32, 8), MAT.steel, -120, 16, 95));
+  pad.add(mesh(new THREE.SphereGeometry(11, 24, 16), MAT.metal, 135, 13, -70));
+  pad.add(mesh(new THREE.BoxGeometry(46, 9, 24), MAT.paint, 95, 4.5, 120));
+  pad.add(mesh(new THREE.BoxGeometry(26, 7, 18), MAT.paint, -85, 3.5, -130));
+})();
+
+/* -- 7 -- the vehicle -------------------------------------------------
+   Every part is authored at its true station height above the engine
+   gimbal plane, so the stack assembles itself from the numbers in V.
+
+     vehicle   carries world position and attitude
+       stage1  booster, legs, grid fins, interstage      (jettisoned)
+       upper   second stage + Merlin Vacuum + fairing
+         fairing
+           halfA / halfB                                  (jettisoned)
+*/
+const vehicle = new THREE.Group();
+scene.add(vehicle);
+
+const stage1 = new THREE.Group();
+const upper  = new THREE.Group();
+vehicle.add(stage1, upper);
+
+/* Hull finish: faint vertical panel seams, ring welds where the barrel
+   sections are stir-welded together, and soot creeping up from the base.
+   Wrapped once around the cylinder, so u runs round and v runs up. */
+function makeHullTexture() {
+  const W = 1024, H = 512;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d');
+
+  g.fillStyle = '#e9eaec';
+  g.fillRect(0, 0, W, H);
+
+  // Vertical panel seams.
+  g.lineWidth = 1;
+  for (let x = 0; x < W; x += 64) {
+    g.strokeStyle = 'rgba(155,160,168,0.40)';
+    g.beginPath(); g.moveTo(x + 0.5, 0); g.lineTo(x + 0.5, H); g.stroke();
+  }
+  // Ring welds: the horizontal joints between barrel sections.
+  for (let y = 26; y < H; y += 52) {
+    g.strokeStyle = 'rgba(150,156,164,0.34)';
+    g.beginPath(); g.moveTo(0, y + 0.5); g.lineTo(W, y + 0.5); g.stroke();
+    g.strokeStyle = 'rgba(255,255,255,0.55)';
+    g.beginPath(); g.moveTo(0, y + 2.5); g.lineTo(W, y + 2.5); g.stroke();
+  }
+  // Soot rising off the engine bay (v = 0 is the bottom of the cylinder).
+  const grime = g.createLinearGradient(0, H, 0, H * 0.72);
+  grime.addColorStop(0, 'rgba(56,54,54,0.55)');
+  grime.addColorStop(1, 'rgba(56,54,54,0)');
+  g.fillStyle = grime;
+  g.fillRect(0, H * 0.72, W, H * 0.28);
+
+  // Vehicle markings. Original marks only - a stencilled serial block and
+  // two caution stripes, no third-party insignia.
+  g.fillStyle = '#1a1c1f';
+  g.fillRect(96, 150, 118, 13);
+  g.fillRect(96, 172, 62, 7);
+  g.font = '600 26px "Barlow Condensed", Arial, sans-serif';
+  g.fillText('B1084 - 09', 96, 140);
+  g.fillStyle = 'rgba(40,44,50,0.65)';
+  for (let i = 0; i < 9; i++) g.fillRect(96 + i * 16, 196, 9, 5);
+
+  const t = new THREE.CanvasTexture(c);
+  if ('colorSpace' in t) t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  return t;
+}
+
+const hullMat = MAT.hull.clone();
+hullMat.map = makeHullTexture();
+
+/* --- booster: thrust structure and nine Merlins --------------------- */
+(function buildEngines() {
+  // Octaweb skirt, slightly flared and heavily sooted.
+  const skirt = mesh(new THREE.CylinderGeometry(V.R, V.R * 1.02, V.ENGINE_BAY, 44, 1, true),
+                     MAT.soot, 0, V.ENGINE_BAY / 2, 0);
+  skirt.material = MAT.soot.clone();
+  skirt.material.side = THREE.DoubleSide;
+  stage1.add(skirt);
+
+  // The eight radial webs the engine bays are bolted into.
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * TAU;
+    const web = mesh(new THREE.BoxGeometry(1.5, 2.2, 0.14), MAT.dark,
+                     Math.cos(a) * 1.05, 1.2, Math.sin(a) * 1.05);
+    web.rotation.y = -a;
+    stage1.add(web);
+  }
+
+  // Nine Merlin 1D bells: one on the centreline, eight on a 1.18 m ring.
+  // The nozzle is a truncated cone, open at both ends so the inside of the
+  // bell is visible from below.
+  const bell = new THREE.CylinderGeometry(0.29, 0.47, 1.62, 16, 1, true);
+  const throat = new THREE.CylinderGeometry(0.22, 0.29, 0.5, 12);
+  const pump = new THREE.BoxGeometry(0.42, 0.5, 0.42);
+  const engines = [];
+  for (let i = 0; i < 9; i++) {
+    const r = i === 0 ? 0 : 1.18;
+    const a = i === 0 ? 0 : ((i - 1) / 8) * TAU;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    const b = mesh(bell, MAT.nozzle, x, 0.90, z);
+    stage1.add(b);
+    stage1.add(mesh(throat, MAT.metal, x, 1.85, z));
+    if (i > 0) stage1.add(mesh(pump, MAT.metal, x * 1.28, 2.35, z * 1.28));
+    engines.push(new Vector3(x, 0.1, z));
+  }
+  vehicle.userData.engines = engines;
+})();
+
+/* --- booster tank, raceway, interstage ------------------------------ */
+(function buildBooster() {
+  const tankH = V.S1_TOP - V.ENGINE_BAY;
+  stage1.add(mesh(new THREE.CylinderGeometry(V.R, V.R, tankH, 48, 1, false),
+                  hullMat, 0, V.ENGINE_BAY + tankH / 2, 0));
+
+  // Raceway: the conduit carrying wiring and pressurant up the side.
+  const race = mesh(new THREE.CylinderGeometry(0.30, 0.30, tankH - 1.5, 10),
+                    MAT.paint, 0, V.ENGINE_BAY + tankH / 2, -(V.R + 0.04));
+  race.scale.set(1.5, 1, 0.55);
+  stage1.add(race);
+
+  // Black composite interstage, and the pusher ring at its top.
+  const interH = V.INTER_TOP - V.S1_TOP;
+  stage1.add(mesh(new THREE.CylinderGeometry(V.R, V.R, interH, 48, 1, true),
+                  MAT.black, 0, V.S1_TOP + interH / 2, 0));
+  stage1.add(mesh(new THREE.CylinderGeometry(V.R * 1.008, V.R * 1.008, 0.35, 48),
+                  MAT.dark, 0, V.INTER_TOP - 0.2, 0));
+  // Cold-gas thruster pods at the top of the booster.
+  for (const a of [0.6, Math.PI - 0.6]) {
+    stage1.add(mesh(new THREE.BoxGeometry(0.7, 0.9, 0.7), MAT.metal,
+                    Math.cos(a) * V.R, V.S1_TOP - 1.6, Math.sin(a) * V.R));
+  }
+})();
+
+/* --- grid fins, stowed ----------------------------------------------
+   Folded flat against the booster below the interstage. The lattice is
+   assembled from the same strut helper as the pad towers, so each fin is
+   a single InstancedMesh of 18 members. */
+(function buildGridFins() {
+  const FIN_Y = 37.6, HW = 0.76, HH = 0.60, X0 = 0.30, TH = 0.055;
+  for (let k = 0; k < 4; k++) {
+    const g = new THREE.Group();
+    const a = (k / 4) * TAU + Math.PI / 4;
+    g.position.set(Math.cos(a) * V.R, FIN_Y, Math.sin(a) * V.R);
+    g.rotation.y = -a;
+
+    const t = new Truss();
+    // Outer frame.
+    t.add(X0, -HH, -HW, X0,  HH, -HW, 0.075);
+    t.add(X0, -HH,  HW, X0,  HH,  HW, 0.075);
+    t.add(X0,  HH, -HW, X0,  HH,  HW, 0.075);
+    t.add(X0, -HH, -HW, X0, -HH,  HW, 0.075);
+    // Lattice: the cells are what make a grid fin work in hypersonic flow.
+    for (let i = 1; i < 7; i++) {
+      const z = -HW + (i / 7) * HW * 2;
+      t.add(X0, -HH, z, X0, HH, z, TH);
+    }
+    for (let i = 1; i < 6; i++) {
+      const y = -HH + (i / 6) * HH * 2;
+      t.add(X0, y, -HW, X0, y, HW, TH);
+    }
+    g.add(t.build(MAT.dark));
+    // Hinge and actuator housing between the fin and the skin.
+    g.add(mesh(new THREE.BoxGeometry(0.34, 1.5, 0.9), MAT.soot, 0.14, 0, 0));
+    stage1.add(g);
+  }
+})();
+
+/* --- landing legs, folded ------------------------------------------- */
+(function buildLegs() {
+  for (let k = 0; k < 4; k++) {
+    const a = (k / 4) * TAU;
+    const g = new THREE.Group();
+    g.rotation.y = -a;
+    // A slender black fairing lying against the tank, pointed at the top.
+    const body = mesh(new THREE.CylinderGeometry(0.19, 0.50, 10.6, 12), MAT.black,
+                      V.R + 0.30, 7.0, 0);
+    body.scale.set(0.85, 1, 1.75);
+    body.rotation.z = -0.012;                // the slight outward lean
+    g.add(body);
+    const tip = mesh(new THREE.ConeGeometry(0.19, 1.6, 12), MAT.black, V.R + 0.36, 13.1, 0);
+    tip.scale.set(0.85, 1, 1.75);
+    g.add(tip);
+    // Foot and the pinned attachment at the thrust structure.
+    const foot = mesh(new THREE.BoxGeometry(0.8, 1.4, 1.5), MAT.black, V.R + 0.24, 1.5, 0);
+    g.add(foot);
+    g.add(mesh(new THREE.CylinderGeometry(0.16, 0.16, 1.9, 8), MAT.metal, V.R + 0.05, 2.7, 0));
+    stage1.add(g);
+  }
+})();
+
+/* --- second stage and the Merlin Vacuum ----------------------------- */
+(function buildUpper() {
+  const h = V.S2_TOP - V.INTER_TOP;
+  upper.add(mesh(new THREE.CylinderGeometry(V.R, V.R, h, 48), hullMat,
+                 0, V.INTER_TOP + h / 2, 0));
+
+  // MVac hangs down inside the interstage and is only revealed at
+  // separation: a short chamber and a large niobium radiative extension.
+  upper.add(mesh(new THREE.CylinderGeometry(0.34, 0.5, 1.1, 14), MAT.metal, 0, V.INTER_TOP - 0.6, 0));
+  const skirtGeo = new THREE.CylinderGeometry(0.5, 1.42, 3.2, 20, 1, true);
+  const mv = mesh(skirtGeo, MAT.copper, 0, V.INTER_TOP - 2.7, 0);
+  mv.material = MAT.copper.clone();
+  mv.material.side = THREE.DoubleSide;
+  upper.add(mv);
+  vehicle.userData.mvacY = V.INTER_TOP - 4.3;
+})();
+
+/* --- payload fairing -------------------------------------------------
+   A blunted tangent ogive turned on a lathe. For a nose of length L on a
+   base radius R the generating arc has radius rho = (R^2 + L^2) / 2R, and
+   at distance x back from the tip the profile radius is
+        r(x) = sqrt(rho^2 - (L - x)^2) + R - rho
+   which is exactly tangent to the barrel where the two meet.           */
+const fairing = new THREE.Group();
+fairing.position.y = V.S2_TOP;
+upper.add(fairing);
+const fairingHalves = [];
+
+(function buildFairing() {
+  const R = V.FAIR_R;
+  const shoulder = V.FAIR_SHOULD - V.S2_TOP;      // 2.6 m taper
+  const barrelTop = V.FAIR_CYL - V.S2_TOP;        // 8.1 m
+  const L = V.TOP - V.FAIR_CYL;                   // 4.9 m nose
+  const rho = (R * R + L * L) / (2 * R);
+
+  const pts = [];
+  pts.push(new Vector2(V.R, 0));
+  pts.push(new Vector2(V.R + (R - V.R) * 0.55, shoulder * 0.42));
+  pts.push(new Vector2(R, shoulder));
+  pts.push(new Vector2(R, barrelTop));
+  // Walk the ogive down from the barrel to a blunt cap.
+  const TIP_CUT = 0.34;
+  for (let i = 1; i <= 16; i++) {
+    const x = L - (i / 16) * (L - TIP_CUT);       // distance back from the tip
+    const r = Math.sqrt(Math.max(0, rho * rho - (L - x) * (L - x))) + R - rho;
+    pts.push(new Vector2(Math.max(r, 0.01), barrelTop + (L - x)));
+  }
+  pts.push(new Vector2(0.30, barrelTop + L - 0.09));
+  pts.push(new Vector2(0.0,  barrelTop + L));
+
+  const fairMat = new THREE.MeshStandardMaterial({
+    color: 0xf1f2f3, roughness: 0.40, metalness: 0.06, side: THREE.DoubleSide
+  });
+
+  // Two half-shells. The seam runs along +/- X so the halves swing clear
+  // across the flight plane, which is how they are actually jettisoned.
+  for (let i = 0; i < 2; i++) {
+    const half = new THREE.Mesh(
+      new THREE.LatheGeometry(pts, 40, Math.PI / 2 + i * Math.PI, Math.PI), fairMat
+    );
+    half.castShadow = true; half.receiveShadow = true;
+    const hinge = new THREE.Group();
+    hinge.add(half);
+    fairing.add(hinge);
+    fairingHalves.push(hinge);
+  }
+  // The separation seam itself, a shallow raised rib run along the
+  // straight barrel only - above the barrel the profile is curving in and
+  // a straight rib would float clear of the shell.
+  for (const s of [-1, 1]) {
+    fairing.add(mesh(new THREE.BoxGeometry(0.1, barrelTop - shoulder, 0.06),
+                     MAT.paint, s * (R - 0.01), (shoulder + barrelTop) / 2, 0));
+  }
+})();
+
+/* Every mesh under the vehicle casts and receives. */
+vehicle.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+
+/* -- 8 -- exhaust -----------------------------------------------------
+   One particle system carries both the combusting plume and the cold
+   smoke it becomes. That is possible because the material blends with
+   PREMULTIPLIED ALPHA:
+
+       dst = src.rgb + dst.rgb * (1 - src.a)
+
+   A particle that writes a bright colour with a near-zero alpha adds to
+   the frame like an additive fire sprite; one that writes a dark colour
+   with a full alpha composites over it like ordinary smoke. Both live in
+   a single draw call, and a plume particle can cross from one behaviour
+   to the other simply by decaying its `heat` - which is exactly what
+   happens when exhaust strikes the flame deflector.
+
+   Everything is held in flat typed arrays and recycled through a ring
+   buffer, so a steady-state plume allocates nothing per frame.        */
+
+const PARTICLE_MAX = 11000;
+
+const exhaustMat = new THREE.ShaderMaterial({
+  uniforms: { uScale: { value: 800 } },
+  transparent: true,
+  depthWrite: false,
+  depthTest: true,
+  blending: THREE.CustomBlending,
+  blendSrc: THREE.OneFactor,
+  blendDst: THREE.OneMinusSrcAlphaFactor,
+  blendEquation: THREE.AddEquation,
+  vertexShader: `
+    precision highp float;
+    uniform float uScale;
+    attribute float aSize;   // world-space diameter, metres
+    attribute float aAlpha;
+    attribute float aHeat;   // 1 = combusting, 0 = cold smoke
+    attribute float aT;      // normalised age, 0..1
+    attribute float aSeed;
+    varying vec3  vColor;
+    varying float vAlpha, vOpaque, vSeed, vHeat;
+
+    void main(){
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_Position = projectionMatrix * mv;
+
+      // Perspective point sizing. A sprite d metres across sitting z metres
+      // down the view axis covers d * uScale / z pixels, where
+      // uScale = viewportHeight / (2 * tan(fov / 2)).
+      gl_PointSize = clamp(aSize * uScale / max(-mv.z, 0.001), 1.0, 620.0);
+
+      // Colour interpolation. Combustion products run white-hot, through
+      // straw, to orange as they cool; entrained smoke starts as bright
+      // condensation and greys out as it expands and thins.
+      vec3 fire  = mix(vec3(1.00, 0.97, 0.88), vec3(1.00, 0.40, 0.09), pow(aT, 0.62));
+      vec3 smoke = mix(vec3(0.95, 0.94, 0.93), vec3(0.29, 0.29, 0.32), pow(aT, 0.55));
+      vColor = mix(smoke, fire * (1.5 + 2.6 * (1.0 - aT)), aHeat);
+
+      vAlpha  = aAlpha;
+      vOpaque = mix(1.0, 0.05, aHeat);   // fire barely occludes, smoke fully does
+      vSeed   = aSeed;
+      vHeat   = aHeat;
+    }`,
+  fragmentShader: `
+    precision highp float;
+    varying vec3  vColor;
+    varying float vAlpha, vOpaque, vSeed, vHeat;
+
+    float h2(vec2 p){ return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5453); }
+    float n2(vec2 p){
+      vec2 i = floor(p), f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(h2(i), h2(i + vec2(1,0)), f.x),
+                 mix(h2(i + vec2(0,1)), h2(i + vec2(1,1)), f.x), f.y);
+    }
+
+    void main(){
+      vec2 uv = gl_PointCoord - 0.5;
+      float r = length(uv) * 2.0;
+      if (r > 1.0) discard;
+
+      // Radial falloff. Fire keeps a tight bright core; smoke is broader.
+      float a = pow(1.0 - r, mix(1.15, 3.0, vHeat));
+
+      // Two octaves of value noise, seeded per particle, tear the perfect
+      // circle into a puff. Fire is left smooth so the jet stays coherent.
+      float n = n2(uv * 5.0 + vSeed * 37.0) * 0.62 + n2(uv * 12.0 - vSeed * 13.0) * 0.38;
+      a *= mix(0.60 + 0.62 * n, 1.0, vHeat);
+      a *= vAlpha;
+      if (a <= 0.003) discard;
+
+      gl_FragColor = vec4(vColor * a, a * vOpaque);
+    }`
+});
+
+/* Shared spawn parameters. Set the fields, then call spawn() - this keeps
+   the emitters allocation-free in the inner loop. */
+const SP = { span: 1, size: 1, grow: 1, alpha: 1, drag: 1, buoy: 0, heat: 1, cool: 2 };
+
+class Exhaust {
+  constructor(max) {
+    this.max = max;
+    this.cursor = 0;
+    this.live = 0;
+    this._acc = 0;
+
+    this.pos    = new Float32Array(max * 3);
+    this.aSize  = new Float32Array(max);
+    this.aAlpha = new Float32Array(max);
+    this.aHeat  = new Float32Array(max);
+    this.aT     = new Float32Array(max);
+    this.aSeed  = new Float32Array(max);
+
+    this.vel    = new Float32Array(max * 3);
+    this.life   = new Float32Array(max);
+    this.span   = new Float32Array(max);
+    this.size0  = new Float32Array(max);
+    this.grow   = new Float32Array(max);
+    this.alpha0 = new Float32Array(max);
+    this.drag   = new Float32Array(max);
+    this.buoy   = new Float32Array(max);
+    this.cool   = new Float32Array(max);
+
+    for (let i = 0; i < max; i++) this.aSeed[i] = Math.random();
+
+    const g = new THREE.BufferGeometry();
+    const A = (arr, n) => new THREE.BufferAttribute(arr, n);
+    g.setAttribute('position', A(this.pos, 3));
+    g.setAttribute('aSize',  A(this.aSize, 1));
+    g.setAttribute('aAlpha', A(this.aAlpha, 1));
+    g.setAttribute('aHeat',  A(this.aHeat, 1));
+    g.setAttribute('aT',     A(this.aT, 1));
+    g.setAttribute('aSeed',  A(this.aSeed, 1));
+    this.geo = g;
+
+    this.points = new THREE.Points(g, exhaustMat);
+    this.points.frustumCulled = false;   // positions move; the bounds go stale
+    this.points.renderOrder = 3;
+    scene.add(this.points);
+  }
+
+  spawn(x, y, z, vx, vy, vz) {
+    const i = this.cursor;
+    this.cursor = (i + 1) % this.max;
+    const i3 = i * 3;
+    this.pos[i3] = x; this.pos[i3 + 1] = y; this.pos[i3 + 2] = z;
+    this.vel[i3] = vx; this.vel[i3 + 1] = vy; this.vel[i3 + 2] = vz;
+    this.life[i] = this.span[i] = SP.span;
+    this.size0[i] = SP.size;
+    this.grow[i]  = SP.grow;
+    this.alpha0[i] = SP.alpha;
+    this.drag[i]  = SP.drag;
+    this.buoy[i]  = SP.buoy;
+    this.cool[i]  = SP.cool;
+    this.aHeat[i] = SP.heat;
+    this.aSize[i] = SP.size;
+    this.aT[i] = 0;
+    this.aAlpha[i] = 0;
+    this.aSeed[i] = Math.random();
+  }
+
+  /* One integration step for every live particle.
+     ctx.impactY  - height of the surface the jet is striking
+     ctx.padFlow  - 1 while the flow is being turned by the trench        */
+  update(dt, ctx) {
+    const { pos, vel, life, span, size0, grow, alpha0, drag, buoy, cool,
+            aSize, aAlpha, aHeat, aT, aSeed } = this;
+    const impactY = ctx.impactY, padFlow = ctx.padFlow;
+    let live = 0;
+
+    for (let i = 0; i < this.max; i++) {
+      if (life[i] <= 0) continue;
+      life[i] -= dt;
+      if (life[i] <= 0) { aAlpha[i] = 0; continue; }
+      live++;
+
+      const i3 = i * 3;
+      // Exponential drag keeps the integration stable at any step size:
+      // v(t+dt) = v(t) * e^(-k dt), which can never overshoot through zero.
+      const k = Math.exp(-drag[i] * dt);
+      vel[i3] *= k;
+      vel[i3 + 1] = (vel[i3 + 1] + buoy[i] * dt) * k;   // hot gas rises
+      vel[i3 + 2] *= k;
+
+      pos[i3]     += vel[i3] * dt;
+      pos[i3 + 1] += vel[i3 + 1] * dt;
+      pos[i3 + 2] += vel[i3 + 2] * dt;
+
+      // --- impingement -------------------------------------------------
+      // A still-burning particle that reaches the deflector has its axial
+      // momentum turned into a radial sheet, and becomes smoke: this is
+      // what generates the pad cloud, rather than a second emitter.
+      if (pos[i3 + 1] < impactY && aHeat[i] > 0.02) {
+        const dx = pos[i3], dz = pos[i3 + 2];
+        const speed = Math.hypot(vel[i3], vel[i3 + 1], vel[i3 + 2]) * 0.52 + 16;
+        let ox, oz;
+        if (padFlow > 0.5) {
+          // The trench is a ridge running along Z, so the flow leaves
+          // along +/- X. Which side is fixed per particle by its seed.
+          ox = aSeed[i] < 0.5 ? -1 : 1;
+          oz = (aSeed[i] * 7.0 % 1.0 - 0.5) * 0.7;
+        } else {
+          const m = Math.hypot(dx, dz) || 1e-3;
+          ox = dx / m; oz = dz / m;
+        }
+        const m2 = Math.hypot(ox, oz);
+        ox /= m2; oz /= m2;
+
+        vel[i3]     = ox * speed;
+        vel[i3 + 1] = speed * 0.26;
+        vel[i3 + 2] = oz * speed;
+        pos[i3 + 1] = impactY + 0.5;
+
+        aHeat[i]  = 0.20;               // still glowing at the trench mouth
+        cool[i]   = 2.4;
+        life[i]   = span[i] = 7 + aSeed[i] * 9;
+        size0[i]  = aSize[i] * 1.6;
+        grow[i]   = 3.4 + aSeed[i] * 4.6;
+        alpha0[i] = 0.55;
+        drag[i]   = 0.7;
+        buoy[i]   = 1.5;
+      }
+
+      aHeat[i] = Math.max(0, aHeat[i] - cool[i] * dt);
+
+      const age = span[i] - life[i];
+      const t = age / span[i];
+      aT[i] = t;
+      aSize[i] = size0[i] + grow[i] * age;
+
+      // Fire flares and dies fast; smoke fades in, holds, then thins out.
+      let f;
+      if (aHeat[i] > 0.35) f = Math.min(1, age * 22) * (1 - t) * (1 - t);
+      else                 f = Math.min(1, age * 5) * Math.pow(1 - t, 1.25);
+      aAlpha[i] = alpha0[i] * f;
+    }
+
+    this.live = live;
+    this.geo.attributes.position.needsUpdate = true;
+    this.geo.attributes.aSize.needsUpdate = true;
+    this.geo.attributes.aAlpha.needsUpdate = true;
+    this.geo.attributes.aHeat.needsUpdate = true;
+    this.geo.attributes.aT.needsUpdate = true;
+    this.geo.attributes.aSeed.needsUpdate = true;
+  }
+
+  clear() {
+    this.life.fill(0);
+    this.aAlpha.fill(0);
+    this.cursor = 0;
+    this.geo.attributes.aAlpha.needsUpdate = true;
+  }
+}
+
+const exhaust = new Exhaust(PARTICLE_MAX);
+
+/* --- the visible jet -------------------------------------------------
+   Particles alone read as smoke, never as a supersonic jet. A single
+   cone drawn additively supplies the coherent core, and its shader draws
+   the standing shock cells - the Mach diamonds - which only form while
+   ambient pressure is high enough for the jet to be over-expanded.    */
+const jetUniforms = {
+  uTime:     { value: 0 },
+  uThrottle: { value: 0 },
+  uAmb:      { value: 1 }      // ambient pressure ratio p(h) / p0
+};
+
+const jet = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.85, 1.9, 1, 28, 1, true),
+  new THREE.ShaderMaterial({
+    uniforms: jetUniforms,
+    transparent: true, depthWrite: false, fog: false,
+    side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+    vertexShader: `
+      varying vec2 vUv;
+      void main(){
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      precision highp float;
+      uniform float uTime, uThrottle, uAmb;
+      varying vec2 vUv;
+      void main(){
+        // t = 0 at the nozzle plane (the top of the cone), 1 at the tail.
+        float t = 1.0 - vUv.y;
+
+        // Shock cells. Their spacing grows downstream as the jet expands,
+        // hence the pow(); they exist only while the jet is confined by
+        // ambient pressure, hence the uAmb factor.
+        float cells = sin(pow(t, 0.72) * 30.0 - uTime * 2.0);
+        float diamonds = smoothstep(0.45, 1.0, cells) * uAmb;
+
+        float body = pow(max(1.0 - t, 0.0), 1.7);
+        float a = (body * 0.5 + diamonds * body * 1.5) * uThrottle;
+
+        vec3 c = mix(vec3(1.0, 0.52, 0.16), vec3(0.88, 0.94, 1.0),
+                     clamp(diamonds * 0.85 + body * 0.30, 0.0, 1.0));
+        gl_FragColor = vec4(c * a, a);
+      }`
+  })
+);
+jet.frustumCulled = false;
+jet.renderOrder = 2;
+vehicle.add(jet);
+
+/* A bright bloom right at the engine plane, so the source of the light
+   reads as a source and not as a hole in the smoke. */
+const flashSprite = (function () {
+  const { c, g } = makeCanvas(128);
+  const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grad.addColorStop(0.00, 'rgba(255,248,230,1)');
+  grad.addColorStop(0.22, 'rgba(255,190,110,0.72)');
+  grad.addColorStop(0.60, 'rgba(255,120,50,0.20)');
+  grad.addColorStop(1.00, 'rgba(255,90,30,0)');
+  g.fillStyle = grad; g.fillRect(0, 0, 128, 128);
+  const tex = new THREE.CanvasTexture(c);
+  if ('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: tex, blending: THREE.AdditiveBlending, depthWrite: false,
+    transparent: true, fog: false
+  }));
+  s.renderOrder = 4;
+  vehicle.add(s);
+  return s;
+})();
+
+/* -- 9 -- flight dynamics (orbital guidance) ---------------------------
+   This is p7_flight.js with one change, in the guidance block: the
+   gravity turn is held under a pitch profile so the ascent actually
+   reaches orbit instead of arcing over and flying back into the ground.
+   Everything else - the integrator, the propulsion model, the events,
+   the debris and the pad animation - is identical.
+   --------------------------------------------------------------------
+   A continuous two-dimensional integration in the launch plane:
+   downrange (world +X) and altitude (world +Y). At every step
+
+       m(t)      = dry + remaining propellant
+       T(h)      = throttle * lerp(T_vac, T_sl, p(h)/p0)
+       mdot      = T / (Isp * g0)
+       D         = 1/2 * rho(h) * v^2 * Cd(M) * A
+       a         = (T * u_thrust - D * v_hat) / m - g(h) * u_up
+
+   integrated with semi-implicit Euler on a fixed 1/120 s step, so the
+   trajectory is identical whatever framerate the browser manages.     */
+
+const IGNITION_T = -2.0;     // engine start, relative to release
+const PITCH_T    = 12.0;     // start of the pitch programme
+const MAX_PITCH  = 1.5708;   // 90 degrees: thrust along the horizon
+
+/* Pitch profile: the steepest angle from vertical the vehicle is allowed
+   to have reached by a given altitude (metres -> radians). A pure gravity
+   turn has no such limit, and that is exactly why it runs away - see the
+   guidance block below. The shape is the real Falcon 9 one: a slow kick
+   through the first few kilometres, most of the turn done between 10 and
+   45 km, and the last of it flown out by the upper stage. */
+const PITCH_PROGRAM = [
+  [     0, 0.00], [  1200, 0.09], [  4000, 0.26], [ 10000, 0.45],
+  [ 22000, 0.66], [ 40000, 0.84], [ 65000, 0.96], [110000, 1.05],
+  [180000, 1.13]
+];
+
+const TARGET_ALT = 205000;   // insertion altitude the upper stage flies to
+
+const FL = {
+  running: false, t: -10,
+  alt: 0, down: 0, vx: 0, vy: 0,
+  pitch: 0, roll: 0,
+  mass: P.m0, prop1: P.m1_prop, prop2: P.m2_prop,
+  throttle: 0, thrust: 0,
+  q: 0, qmax: 0, mach: 0, gLoad: 0, vmag: 0,
+  stage: 1,                  // 1 = booster, 0 = coasting between, 2 = upper
+  fairingOn: true,
+  fired: Object.create(null),
+  mecoT: null, sepT: null
+};
+
+/* Free-flying debris (the spent booster, the fairing halves) gets a tiny
+   ballistic sub-simulation of its own. */
+const debris = [];
+
+function currentMass() {
+  let m = P.payload + P.m2_dry + FL.prop2;
+  if (FL.fairingOn) m += P.fairing;
+  if (FL.stage !== 2) m += P.m1_dry + FL.prop1;
+  return m;
+}
+
+function fireEvent(key, label, hot) {
+  if (FL.fired[key]) return;
+  FL.fired[key] = FL.t;
+  showCallout(label, hot);
+  markSequence(key);
+}
+
+function step(dt) {
+  if (!FL.running) return;
+  FL.t += dt;
+
+  const alt = FL.alt;
+  const p   = pressure(alt);
+  const rho = density(alt);
+  const pr  = p / P.p0;                    // ambient pressure ratio
+  const g   = gravity(alt);
+
+  /* --- propulsion --------------------------------------------------- */
+  let th = 0, Tfull = 0, isp = 1;
+
+  if (FL.stage === 1 && FL.prop1 > 0) {
+    Tfull = lerp(P.T1_vac, P.T1_sl, pr);   // thrust rises as ambient falls
+    isp   = lerp(P.isp1_vac, P.isp1_sl, pr);
+    if (FL.t >= IGNITION_T) {
+      if (FL.t < 0) {
+        // Ignition transient: chambers come up over ~1.3 s and the stack
+        // is held on the clamps while the computer confirms all nine.
+        th = clamp((FL.t - IGNITION_T) / 1.3, 0, 1) * (0.96 + 0.04 * fbm(FL.t * 11));
+        if (!FL.fired.ignition) fireEvent('ignition', 'Ignition', true);
+      } else {
+        th = tableLookup(THROTTLE_TABLE, FL.t);
+      }
+    }
+  } else if (FL.stage === 2 && FL.prop2 > 0 && FL.fired.ses1) {
+    Tfull = P.T2_vac;
+    isp   = P.isp2_vac;
+    th    = 1;
+  }
+
+  FL.mass = currentMass();
+
+  /* Closed-loop load relief: hold axial acceleration under G_LIMIT by
+     backing the throttle off as the tanks drain. This is what reproduces
+     the real throttle-down in the last half-minute before MECO. */
+  if (FL.t > 0 && Tfull > 0 && th > 0) {
+    const thG = (FL.mass * P.G_LIMIT * g) / Tfull;
+    th = clamp(Math.min(th, Math.max(0.55, thG)), 0, 1);
+  }
+
+  const T = Tfull * th;
+  FL.throttle = th;
+  FL.thrust = T;
+
+  if (T > 0) {
+    const mdot = T / (isp * P.g0);
+    if (FL.stage === 1) {
+      FL.prop1 = Math.max(0, FL.prop1 - mdot * dt);
+      if (FL.prop1 === 0) meco();
+    } else {
+      FL.prop2 = Math.max(0, FL.prop2 - mdot * dt);
+      if (FL.prop2 === 0) fireEvent('seco', 'SECO-1  -  orbit', false);
+    }
+  }
+
+  /* --- aerodynamics -------------------------------------------------- */
+  const v = Math.hypot(FL.vx, FL.vy);
+  FL.vmag = v;
+  FL.mach = v / tableLookup(SOS_TABLE, alt);
+  FL.q = 0.5 * rho * v * v;
+  const A = FL.fairingOn ? P.A_fair : P.A_core;
+  const D = FL.q * tableLookup(CD_TABLE, FL.mach) * A;
+
+  if (FL.q > FL.qmax) {
+    FL.qmax = FL.q;
+  } else if (FL.qmax > 20000 && FL.t > 40) {
+    // The peak has passed: q is falling because density is dropping
+    // faster than v^2 is rising.
+    fireEvent('maxq', 'Max Q', false);
+  }
+
+  /* --- guidance -------------------------------------------------------
+     Vertical until the pitch programme, then a gravity turn: thrust is
+     held along the velocity vector so no side force is needed and gravity
+     alone bends the trajectory over. The decaying bias term stands in for
+     the closed-loop steering that shapes the real profile.             */
+  if (FL.t < PITCH_T) {
+    FL.pitch = 0;
+  } else if (FL.stage === 1) {
+    /* First stage, in air. Thrust is held along the velocity vector so the
+       stack flies at no angle of attack, but that gravity turn is not
+       stable on its own: its commanded angle IS the flight path angle, so
+       the instant vertical speed stops growing the command swings to the
+       horizon, the vertical component of thrust collapses, and the
+       vehicle can never climb out of it again - it arcs over and flies
+       back into the ground. Real ascent guidance will not trade away more
+       vertical speed than the altitude it has already earned can afford,
+       so the turn is held under the profile above. The gravity turn still
+       leads while it is sane, which is nearly the whole booster burn, and
+       the ceiling only catches it afterwards. */
+    const bias = 0.092 * Math.exp(-(FL.t - PITCH_T) / 48);
+    const grav = Math.atan2(FL.vx, Math.max(FL.vy, 1)) + bias;
+    const ceiling = tableLookup(PITCH_PROGRAM, FL.alt);
+    const wanted = clamp(Math.min(grav, ceiling), 0, MAX_PITCH);
+    FL.pitch = damp(FL.pitch, wanted, 2.4, dt);
+    if (FL.t > PITCH_T + 0.1) fireEvent('pitch', 'Pitch and roll program', false);
+
+  } else if (FL.stage === 2 && T > 0) {
+    /* Upper stage, in vacuum. There is no air left to fly a zero angle of
+       attack for, so steer directly instead of following the velocity.
+       Hold just enough thrust vertical to carry what gravity still takes
+       off the vehicle once the horizontal speed is bearing part of the
+       load, and put everything else into building that horizontal speed.
+       The faster it goes the more the centrifugal term cancels gravity,
+       the smaller the vertical share needed, until the stage is thrusting
+       flat along the horizon - which is what orbital insertion is. */
+    const climb  = clamp((TARGET_ALT - FL.alt) * 0.005, 0, 400);
+    const centri = (FL.vx * FL.vx) / (P.Re + FL.alt);
+    const need   = (g - centri) + (climb - FL.vy) * 0.008;
+    const avail  = Math.max(T / FL.mass, 0.01);
+    const wanted = clamp(Math.acos(clamp(need / avail, -1, 1)), 0, MAX_PITCH);
+    FL.pitch = damp(FL.pitch, wanted, 1.6, dt);
+  }
+
+  /* --- integrate ------------------------------------------------------ */
+  const m = FL.mass;
+  const sp = Math.sin(FL.pitch), cp = Math.cos(FL.pitch);
+  const vhx = v > 0.01 ? FL.vx / v : 0, vhy = v > 0.01 ? FL.vy / v : 0;
+
+  const ax = (T * sp - D * vhx) / m;
+  const ay = (T * cp - D * vhy) / m - g;
+
+  FL.gLoad = Math.hypot(T * sp - D * vhx, T * cp - D * vhy) / m / P.g0;
+
+  if (FL.t < 0) {
+    // Held on the clamps: the mount takes the whole load.
+    FL.vx = FL.vy = 0;
+    FL.gLoad = 0;
+  } else {
+    if (!FL.fired.liftoff) fireEvent('liftoff', 'Liftoff', true);
+    FL.vx += ax * dt;
+    FL.vy += ay * dt;
+    FL.down += FL.vx * dt;
+    FL.alt  += FL.vy * dt;
+    if (FL.alt < 0) { FL.alt = 0; FL.vy = Math.max(0, FL.vy); }
+  }
+
+  // Slow roll about the body axis once clear of the tower.
+  if (FL.t > PITCH_T) FL.roll += dt * 0.055;
+
+  /* --- flight events -------------------------------------------------- */
+  if (FL.mecoT !== null) {
+    if (FL.stage === 0 && FL.t > FL.mecoT + 3.5) separate();
+    if (FL.sepT !== null) {
+      if (!FL.fired.ses1 && FL.t > FL.sepT + 3.0) {
+        FL.stage = 2;
+        fireEvent('ses1', 'Second engine start', true);
+      }
+      if (FL.fairingOn && FL.t > FL.sepT + 34) deployFairing();
+    }
+  }
+
+  stepDebris(dt);
+}
+
+function meco() {
+  FL.stage = 0;
+  FL.mecoT = FL.t;
+  FL.throttle = 0;
+  fireEvent('meco', 'MECO', true);
+}
+
+/* Stage separation. The booster is detached with Object3D.attach(), which
+   re-parents it while preserving its world transform, then flown on its
+   own ballistic state with a slow tumble. */
+function separate() {
+  if (FL.sepT !== null) return;
+  FL.sepT = FL.t;
+
+  scene.attach(stage1);
+  debris.push({
+    obj: stage1,
+    v: new Vector3(FL.vx - Math.cos(FL.pitch) * 1.2, FL.vy - Math.sin(FL.pitch) * 0.4, 0),
+    spin: new Vector3(0.004, 0.02, 0.09)
+  });
+
+  // Pneumatic pushers: a short cold-gas burst between the two stages.
+  const base = vehicle.localToWorld(new Vector3(0, V.INTER_TOP, 0));
+  SP.span = 1.6; SP.size = 1.4; SP.grow = 6; SP.alpha = 0.5;
+  SP.drag = 0.7; SP.buoy = 0; SP.heat = 0; SP.cool = 3;
+  for (let i = 0; i < 160; i++) {
+    const a = Math.random() * TAU, s = rand(6, 26);
+    exhaust.spawn(base.x + Math.cos(a) * 1.5, base.y, base.z + Math.sin(a) * 1.5,
+                  FL.vx + Math.cos(a) * s, FL.vy + rand(-6, 6), Math.sin(a) * s);
+  }
+
+  fireEvent('sep', 'Stage separation', false);
+  FL.stage = 0;   // coasting until SES-1 sets it to 2
+}
+
+function deployFairing() {
+  FL.fairingOn = false;
+  for (let i = 0; i < 2; i++) {
+    const half = fairingHalves[i];
+    scene.attach(half);
+    const s = i === 0 ? -1 : 1;
+    debris.push({
+      obj: half,
+      v: new Vector3(FL.vx, FL.vy + 1.5, s * 7.5),
+      spin: new Vector3(s * 0.55, 0.05, 0.02)
+    });
+  }
+  fireEvent('fairing', 'Fairing deploy', false);
+}
+
+function stepDebris(dt) {
+  for (let i = debris.length - 1; i >= 0; i--) {
+    const d = debris[i];
+    const g = gravity(Math.max(0, d.obj.position.y));
+    d.v.y -= g * dt;
+    d.obj.position.addScaledVector(d.v, dt);
+    d.obj.rotation.x += d.spin.x * dt;
+    d.obj.rotation.y += d.spin.y * dt;
+    d.obj.rotation.z += d.spin.z * dt;
+    // Retire anything that has fallen far behind the active vehicle.
+    if (d.obj.position.y < -400 || FL.alt - d.obj.position.y > 30000) {
+      scene.remove(d.obj);
+      debris.splice(i, 1);
+    }
+  }
+}
+
+/* --- pad hardware animation ------------------------------------------ */
+function updatePad(dt) {
+  // Hold-down clamps swing clear the instant the count reaches zero.
+  const rel = clamp((FL.t - 0.0) / 0.35, 0, 1);
+  for (let i = 0; i < clamps.length; i++) clamps[i].rotation.z = -rel * 1.25;
+
+  // Umbilical arms retract just before release.
+  const ret = clamp((FL.t + 0.4) / 1.6, 0, 1);
+  for (const u of umbilicals) {
+    u.position.x = 1.35 - ret * 2.8;
+    u.rotation.z = -ret * 0.52;
+  }
+
+  // The transporter-erector nods back off the vehicle, then tips to 45.
+  let tilt = 0;
+  if (FL.t > 0.4) tilt = smoothstep(0.4, 3.0, FL.t) * 0.05;
+  if (FL.t > 6)   tilt = 0.05 + smoothstep(6, 28, FL.t) * 0.73;
+  strongback.rotation.z = tilt;
+}
+
+/* --- the vehicle's world transform ----------------------------------- */
+const AXIS_Y = new Vector3(0, 1, 0), AXIS_Z = new Vector3(0, 0, 1);
+const _qp = new Quaternion(), _qr = new Quaternion();
+
+function placeVehicle(now) {
+  // The stack's origin is its engine gimbal plane, which rests on the
+  // launch mount deck, so world height is altitude plus the deck.
+  vehicle.position.set(FL.down, FL.alt + PAD_DECK, 0);
+
+  // Structural shudder while the engines are up and the clamps still hold:
+  // three octaves of value noise, scaled by thrust.
+  if (FL.t > IGNITION_T && FL.t < 1.2) {
+    const s = FL.throttle * (FL.t < 0 ? 0.055 : 0.03);
+    vehicle.position.x += fbm(now * 31) * s;
+    vehicle.position.z += fbm(now * 27 + 40) * s;
+    vehicle.position.y += fbm(now * 37 + 90) * s * 0.5;
+  }
+
+  // Pitch about world Z, then roll about the vehicle's OWN axis. Composing
+  // quaternions (rather than setting two Euler angles) is what keeps the
+  // roll a roll instead of turning into a yaw once the stack is pitched.
+  _qp.setFromAxisAngle(AXIS_Z, -FL.pitch);
+  _qr.setFromAxisAngle(AXIS_Y, FL.roll);
+  vehicle.quaternion.copy(_qp).multiply(_qr);
+}
+
+/* --- exhaust emission ------------------------------------------------- */
+const _ax = new Vector3(), _rt = new Vector3(), _fw = new Vector3(), _ep = new Vector3();
+
+function emitExhaust(dt, now) {
+  const pr = pressure(FL.alt) / P.p0;
+  const vac = 1 - pr;                       // 0 at sea level, 1 in vacuum
+  const th = FL.throttle;
+
+  jetUniforms.uTime.value = now;
+  jetUniforms.uAmb.value = pr;
+
+  if (th <= 0.01 || (FL.stage !== 1 && FL.stage !== 2)) {
+    jetUniforms.uThrottle.value = damp(jetUniforms.uThrottle.value, 0, 12, dt);
+    flashSprite.scale.setScalar(damp(flashSprite.scale.x, 0.01, 12, dt));
+    return;
+  }
+
+  const isUpper = FL.stage === 2;
+  _ax.set(0, 1, 0).applyQuaternion(vehicle.quaternion);
+  _rt.set(1, 0, 0).applyQuaternion(vehicle.quaternion);
+  _fw.set(0, 0, 1).applyQuaternion(vehicle.quaternion);
+
+  // Engine plane in world space.
+  const localY = isUpper ? vehicle.userData.mvacY : 0.1;
+  _ep.copy(vehicle.position).addScaledVector(_ax, localY);
+
+  /* The coherent core. A Merlin's real exhaust leaves at about 2.8 km/s;
+     the particles are flown at a small fraction of that so a plume still
+     exists between frames - the jet mesh is what carries the impression
+     of speed. */
+  const coreLen = isUpper ? lerp(26, 52, vac) : lerp(22, 52, vac) * (0.55 + 0.45 * th);
+  const coreW   = isUpper ? lerp(1.4, 4.2, vac) : lerp(1.5, 4.0, vac);
+  const flick = 1 + fbm(now * 26) * 0.10;
+  jet.position.set(0, localY - coreLen * 0.5 * flick, 0);
+  jet.scale.set(coreW * flick, coreLen * flick, coreW * flick);
+  jetUniforms.uThrottle.value = damp(jetUniforms.uThrottle.value, th * (isUpper ? 0.55 : 1), 10, dt);
+
+  flashSprite.position.set(0, localY, 0);
+  flashSprite.scale.setScalar(damp(flashSprite.scale.x,
+    (isUpper ? 6 : lerp(7, 17, vac)) * th, 9, dt));
+
+  /* --- particles ----------------------------------------------------- */
+  const rate = (isUpper ? 170 : 780) * th * quality.spawn;
+  exhaust._acc += rate * dt;
+  let n = Math.min(Math.floor(exhaust._acc), 300);
+  exhaust._acc -= n;
+  if (n <= 0) return;
+
+  // Jet speed and cone angle. A rocket exhaust is tightly collimated in
+  // thick air and blooms enormously once there is nothing to confine it.
+  const speed  = (isUpper ? 210 : 105) * (0.55 + 0.45 * th) * lerp(1, 2.4, vac);
+  const spread = isUpper ? 0.30 : lerp(0.06, 0.40, vac);
+  const bellR  = isUpper ? 1.3 : 1.45;
+
+  SP.span  = (isUpper ? 1.5 : 0.55) + Math.random() * (isUpper ? 1.2 : 0.45);
+  SP.alpha = isUpper ? 0.5 : 0.95;
+  SP.drag  = isUpper ? 0.25 : lerp(1.7, 0.5, vac);
+  SP.buoy  = 0;
+  SP.heat  = 1;
+  SP.cool  = isUpper ? 0.55 : lerp(2.1, 0.7, vac);
+
+  for (let k = 0; k < n; k++) {
+    // Spawn across the engine cluster, densest on the centreline.
+    const a = Math.random() * TAU;
+    const r = Math.sqrt(Math.random()) * bellR;
+    const ox = Math.cos(a) * r, oz = Math.sin(a) * r;
+
+    const px = _ep.x + _rt.x * ox + _fw.x * oz;
+    const py = _ep.y + _rt.y * ox + _fw.y * oz;
+    const pz = _ep.z + _rt.z * ox + _fw.z * oz;
+
+    // Velocity: the vehicle's own motion, plus the jet down the body axis,
+    // plus a lateral component that opens the cone.
+    const sx = rand(-1, 1) * spread * speed;
+    const sz = rand(-1, 1) * spread * speed;
+    const jv = speed * rand(0.78, 1.15);
+
+    SP.size = (isUpper ? 2.4 : lerp(1.1, 2.6, vac)) * rand(0.75, 1.3);
+    SP.grow = isUpper ? 9 : lerp(5.5, 14, vac);
+
+    exhaust.spawn(px, py, pz,
+      FL.vx - _ax.x * jv + _rt.x * sx + _fw.x * sz,
+      FL.vy - _ax.y * jv + _rt.y * sx + _fw.y * sz,
+             - _ax.z * jv + _rt.z * sx + _fw.z * sz);
+  }
+
+  /* Deluge steam: while the stack is still on the mount, the sound
+     suppression water flashes to steam at both trench mouths. */
+  if (FL.t > IGNITION_T && FL.alt < 90) {
+    const fade = 1 - smoothstep(0, 90, FL.alt);
+    SP.span = 5 + Math.random() * 5; SP.alpha = 0.52; SP.drag = 0.55;
+    SP.buoy = 3.4; SP.heat = 0; SP.cool = 3; SP.grow = 5.4;
+    const m = Math.floor(10 * fade * th * quality.spawn);
+    for (let k = 0; k < m; k++) {
+      const s = Math.random() < 0.5 ? -1 : 1;
+      SP.size = rand(3.5, 6.0);
+      exhaust.spawn(s * rand(11, 19), rand(1.5, 4), rand(-7, 7),
+                    s * rand(10, 28), rand(4, 16), rand(-9, 9));
+    }
+  }
+}
+
+/* --- engine lighting --------------------------------------------------
+   The point light attached to the exhaust is the only dynamic shadow
+   caster besides the sun, and a shadow-casting point light is six render
+   passes, so it is switched off the moment the vehicle is too high for
+   those shadows to land on anything. */
+function updateEngineLight(now) {
+  const th = FL.throttle;
+  if (th <= 0.01) {
+    engineLight.intensity = 0;
+    glowLight.intensity = 0;
+    engineLight.castShadow = false;
+    renderer.toneMappingExposure = 1.0;
+    return;
+  }
+  _ax.set(0, 1, 0).applyQuaternion(vehicle.quaternion);
+  const localY = FL.stage === 2 ? vehicle.userData.mvacY : 0.1;
+  _ep.copy(vehicle.position).addScaledVector(_ax, localY - 5);
+
+  // Combustion flicker: two noise octaves at different rates so it reads
+  // as turbulence rather than a strobe.
+  const flick = 1 + fbm(now * 34) * 0.16 + fbm(now * 8.5) * 0.09;
+
+  engineLight.position.copy(_ep);
+  glowLight.position.copy(_ep);
+
+  const near = smoothstep(2600, 260, FL.alt);      // 1 near the pad, 0 high up
+  engineLight.intensity = 5200 * th * flick * near;
+  glowLight.intensity   = 2600 * th * flick * near;
+  engineLight.castShadow = FL.alt < 300 && quality.engineShadow;
+
+  // A touch of exposure lift at ignition so the frame blooms.
+  const bloom = th * smoothstep(3200, 0, FL.alt);
+  renderer.toneMappingExposure = 1.0 + bloom * 0.22;
+
+  // Once the vehicle and the strongback have both left the sun's shadow
+  // volume, nothing inside it moves again - so the map is rendered one
+  // last time and then frozen, which retires a 2048px pass per frame.
+  if (FL.alt > 4000 && renderer.shadowMap.autoUpdate) {
+    renderer.shadowMap.autoUpdate = false;
+    renderer.shadowMap.needsUpdate = true;
+  }
+}
+
+/* -- 10 -- camera director --------------------------------------------
+   Five framings plus an auto-director that cuts between them. A shot
+   only has to publish where the camera stands, what it points at and how
+   much of the frame the vehicle should fill. Everything that keeps the
+   shot watchable happens here, in one place:
+
+     framing  the lens - or the standoff, for the shots that fly - is
+              solved from the live size of the stack, so the whole
+              vehicle and a length of flame sit inside the picture on any
+              aspect ratio, portrait phone included
+     lead     the desired framing's own motion is fed forward before the
+              damping. A plain damped follow always trails a moving
+              target by v/lambda, which at two kilometres a second is
+              what walks the vehicle off the edge of the frame
+     guard    once the damping and the shake have had their say the frame
+              is measured again and the lens opened if anything has been
+              pushed outside it
+     shake    acoustic pressure off the plume, and airframe buffet for
+              the camera that is bolted to the vehicle                  */
+
+const quality = { spawn: 1, engineShadow: true, level: 2 };
+
+const DEG = Math.PI / 180;
+const WORLD_UP = new Vector3(0, 1, 0);
+const FRAME_GUARD = 0.95;   // fraction of the half-frame the guard defends
+const AFT_IN_SHOT = 0.55;   // how far up the body the rocketcam has to see
+
+const CAM = {
+  mode: 0,            // 0 = auto
+  active: 1,
+  last: -1,
+  fov: 32,
+  pos: new Vector3(72, 26, 88),
+  target: new Vector3(0, 35, 0),
+  orbitYaw: 0, orbitPitch: 0, orbitZoom: 1,
+
+  dist: 0,                                  // solved standoff, flying shots
+  guard: 0,                                 // degrees of lens the guard added
+  clock: 0,                                 // last simulation time seen
+  anchor: new Vector3()                     // where the vehicle was last frame
+};
+
+/* What the current shot wants. Filled in from scratch every frame. */
+const SHOT = {
+  pos: new Vector3(),     // where the camera stands (locked-off shots)
+  aim: new Vector3(),     // what sits in the middle of the frame
+  dir: new Vector3(),     // unit vector, aim -> eye
+  fly: false,             // solve the standoff rather than the lens
+  rides: false,           // the camera travels with the vehicle
+  solve: true,            // measure the frame and size the lens to it
+  wheel: 0,               // 0: the wheel scales the framing, 1: the standoff
+  fov: 34, fill: 0.70, lo: 20, hi: 60,
+  lam: 5, drift: 0,
+  shakePos: 0.3, shakeRot: 0.6
+};
+
+const TSITE = new Vector3(-180, 12, 690);   // tracker site, chosen at the cut
+
+const _sv = new Vector3(), _e = new Vector3(), _eye = new Vector3();
+const _r = new Vector3(), _u = new Vector3(), _f = new Vector3(), _d = new Vector3();
+const _boom = new Vector3(), _tmp = new Vector3();
+
+/* --- acoustic delay line ---------------------------------------------
+   The shake a distant camera feels is the sound pressure that left the
+   engines r / 343 seconds ago, not the thrust right now. Twenty
+   milliseconds per slot over ten seconds is plenty of resolution.     */
+const ACO_N = 512, ACO_STEP = 0.02;
+const acoustic = new Float32Array(ACO_N);
+let acoIdx = 0, acoAcc = 0;
+
+function pushAcoustic(dt, value) {
+  acoAcc += dt;
+  while (acoAcc >= ACO_STEP) {
+    acoAcc -= ACO_STEP;
+    acoIdx = (acoIdx + 1) % ACO_N;
+    acoustic[acoIdx] = value;
+  }
+}
+function acousticAt(delay) {
+  const back = Math.min(ACO_N - 1, Math.max(0, Math.round(delay / ACO_STEP)));
+  return acoustic[(acoIdx - back + ACO_N * 2) % ACO_N];
+}
+
+/* --- the subject ------------------------------------------------------
+   What has to stay inside the frame. It is rebuilt every frame because
+   the thing being filmed gets shorter twice: the booster goes at
+   separation and the fairing goes thirty seconds later.               */
+const SUB = {
+  axis: new Vector3(),
+  base: new Vector3(), top: new Vector3(), mid: new Vector3(),
+  half: 35, rad: 4, plume: 0
+};
+
+function updateSubject() {
+  SUB.axis.set(0, 1, 0).applyQuaternion(vehicle.quaternion);
+
+  // Station lines of the live vehicle: engine plane to nose, then the
+  // MVac bell to the nose, then the bare second stage and its payload.
+  const b = FL.sepT !== null ? vehicle.userData.mvacY : 0;
+  const t = FL.fairingOn ? V.TOP : V.S2_TOP;
+
+  SUB.base.copy(vehicle.position).addScaledVector(SUB.axis, b);
+  SUB.top .copy(vehicle.position).addScaledVector(SUB.axis, t);
+  SUB.half = (t - b) * 0.5;
+  SUB.rad  = (FL.fairingOn ? V.FAIR_R : V.R) + 1.6;
+
+  // Plume length, mirroring what the exhaust actually draws: short and
+  // collimated in thick air, blooming to fifty metres in vacuum.
+  const vac = 1 - pressure(FL.alt) / P.p0;
+  const th  = FL.throttle;
+  SUB.plume = th > 0.02
+    ? (FL.stage === 2 ? lerp(26, 52, vac) : lerp(22, 52, vac) * (0.55 + 0.45 * th))
+    : 0;
+}
+
+/* The two points the framing has to hold, and the centre between them.
+   In camera space a straight segment's screen offset is a ratio of two
+   linear functions of the parameter, so it is monotone and its worst
+   value is always at an end - sampling along the body would find
+   nothing the ends do not already say.                                */
+const FIT = [new Vector3(), new Vector3(), new Vector3()];
+let FIT_N = 2;
+
+function framePoints(plumeShare) {
+  FIT[0].copy(SUB.base).addScaledVector(SUB.axis, -SUB.plume * plumeShare);
+  FIT[1].copy(SUB.top);
+  FIT_N = 2;
+  return SUB.mid.addVectors(FIT[0], FIT[1]).multiplyScalar(0.5);
+}
+
+/* --- the framing solver -----------------------------------------------
+   lookBasis builds the same right/up/forward three.js will build from
+   camera.lookAt, and fitTan then reports the half-height of the picture,
+   as a tangent, that just contains the subject. Both screen axes are
+   tested against the aspect ratio, so a stack held upright on a phone is
+   framed by its length and not by its width.                          */
+let fitBehind = false;
+
+function lookBasis(eye, aim) {
+  _f.subVectors(aim, eye);
+  if (_f.lengthSq() < 1e-8) _f.set(0, 0, -1); else _f.normalize();
+  _r.crossVectors(_f, WORLD_UP);
+  if (_r.lengthSq() < 1e-8) _r.set(1, 0, 0); else _r.normalize();
+  _u.crossVectors(_r, _f);
+}
+
+function fitTan(eye) {
+  const asp = Math.max(0.25, camera.aspect);
+  let need = 0;
+  fitBehind = false;
+  for (let i = 0; i < FIT_N; i++) {
+    _d.subVectors(FIT[i], eye);
+    const z = _d.dot(_f);
+    if (z < 1) { fitBehind = true; continue; }   // beside or behind the lens
+    const y = (Math.abs(_d.dot(_u)) + SUB.rad) / z;
+    const x = (Math.abs(_d.dot(_r)) + SUB.rad) / (z * asp);
+    if (y > need) need = y;
+    if (x > need) need = x;
+  }
+  return need > 0 ? need : 0.3;
+}
+
+/* --- the running order ------------------------------------------------
+   Pad camera through tower clear, the ground tracker for the climb-out,
+   then the aerial plate for the rest of the burn, with the onboard rig
+   cut in over the two events worth seeing from the vehicle itself. Every
+   branch covers one contiguous stretch of the count, so the director
+   cannot flicker between two shots.                                   */
+function autoPick() {
+  const t = FL.t;
+  if (FL.mecoT !== null && t > FL.mecoT - 3 && t < FL.mecoT + 12) return 4;
+  if (FL.fired.fairing !== undefined && t < FL.fired.fairing + 11) return 4;
+  if (t < 9) return 1;
+  if (t < 34) return 2;
+  return 3;
+}
+
+function updateCamera(dtReal, now) {
+  /* Damping runs on simulation time. `now` is the simulation clock, so
+     its advance already carries the time-rate multiplier - which is what
+     holds the vehicle in the middle of the frame at 16x instead of
+     leaving the camera to trail a kilometre behind it. */
+  let dt = now - CAM.clock;
+  CAM.clock = now;
+  if (!(dt > 0)) dt = 0; else if (dt > 0.5) dt = 0.5;
+
+  const mode = CAM.mode === 0 ? autoPick() : CAM.mode;
+  /* The onboard rig moves from the interstage to the top of stage 2 at
+     separation. That is a cut, not a camera flying up the vehicle. */
+  const rig = mode === 4 ? (FL.sepT !== null ? 41 : 40) : mode;
+  const cut = rig !== CAM.last;
+  CAM.last = rig;
+  CAM.active = mode;
+
+  updateSubject();
+
+  SHOT.fly = false; SHOT.rides = false; SHOT.solve = true; SHOT.drift = 0;
+  SHOT.wheel = 0; SHOT.lam = 5; SHOT.lo = 20; SHOT.hi = 60;
+
+  if (mode === 1) {
+    /* --- PAD: a remote camera inside the perimeter. It cranes slowly up
+       and around the mount while the lens opens to keep the stack, the
+       deluge and the flame trench in one frame. */
+    const k = smoothstep(-8, 30, FL.t);
+    SHOT.aim.copy(framePoints(0.85));
+    const az = 0.86 + k * 0.32, r = lerp(94, 124, k);
+    SHOT.pos.set(Math.sin(az) * r, lerp(6.5, 34, k * k), Math.cos(az) * r);
+    SHOT.fill = 0.72; SHOT.lo = 24; SHOT.hi = 82;
+    SHOT.lam = 3.4; SHOT.drift = 0.05;
+    SHOT.shakePos = 1.0; SHOT.shakeRot = 1.0;
+
+  } else if (mode === 2) {
+    /* --- TRACKER: a long lens on the ground, locked off on its tripod.
+       The site is picked once, on the cut, from where the vehicle is at
+       that moment: real range cameras hand off between stations rather
+       than fly, and choosing the station at the cut is what stops the
+       shot from ending as a dot in an empty sky. The lens is then solved
+       so the stack holds a constant share of the frame, which is exactly
+       what a tracking operator is doing by hand. */
+    if (cut) {
+      const reach = clamp(260 + FL.alt * 0.5, 260, 7000);
+      TSITE.set(vehicle.position.x - reach * 0.34 - 150, 11, reach * 0.94 + 150);
+    }
+    SHOT.aim.copy(framePoints(0.8));
+    SHOT.pos.copy(TSITE);
+    SHOT.fill = 0.50; SHOT.lo = 1.6; SHOT.hi = 48;
+    SHOT.lam = 6; SHOT.drift = 0.035;
+    SHOT.shakePos = 0.12; SHOT.shakeRot = 1.5;
+
+  } else if (mode === 3) {
+    /* --- CHASE: an aerial plate holding station off the vehicle's
+       flank. It eases round the body axis and drifts in elevation so the
+       stack turns in view, and the standoff is solved rather than fixed:
+       the old 52 m offset put a 70 m vehicle in a 37 m frame, which is
+       why half the rocket used to be outside the picture. */
+    SHOT.aim.copy(framePoints(0.42));
+    const a = now * 0.055 + 0.6;
+    // Near the ground the plate is held above the flank so it cannot be
+    // flown through the terrain on its way round.
+    const el = lerp(0.14 + Math.sin(now * 0.021) * 0.22, 0.34,
+                    smoothstep(600, 60, FL.alt));
+    const ce = Math.cos(el);
+    SHOT.dir.set(Math.cos(a) * ce, Math.sin(el), Math.sin(a) * ce)
+            .applyQuaternion(vehicle.quaternion);
+    SHOT.fly = true; SHOT.rides = true;
+    SHOT.fov = 34; SHOT.fill = 0.80; SHOT.lo = 24; SHOT.hi = 62;
+    SHOT.lam = 4.5;
+    SHOT.shakePos = 0.35; SHOT.shakeRot = 0.6;
+
+  } else if (mode === 4) {
+    /* --- ONBOARD: a fixed camera on a short boom, looking back down the
+       vehicle at the engines, the plume and the ground falling away.
+       Nothing is solved here - a rocketcam sees whatever the mount sees -
+       but the boom is long enough, and the aim carried far enough past
+       the axis, that the body fills one side of the frame instead of
+       sitting just off the edge of it. */
+    _boom.set(1, 0, 0).applyQuaternion(vehicle.quaternion);
+    const flown = FL.sepT !== null;
+    const mountH = flown ? V.S2_TOP - 1.5 : V.INTER_TOP - 1.0;
+    const boom = V.R + (flown ? 2.2 : 3.2);
+    const look = flown ? 40 : 46;
+    SHOT.pos.copy(vehicle.position)
+      .addScaledVector(SUB.axis, mountH).addScaledVector(_boom, boom);
+    SHOT.aim.copy(vehicle.position)
+      .addScaledVector(SUB.axis, mountH - look).addScaledVector(_boom, -boom * 0.3);
+
+    /* A rocketcam frames whatever the mount sees, so the solver is only
+       shown the part of the vehicle aft of the boom - what is level with
+       the lens or above it is behind the shot by construction - and the
+       lens is floored at the 62 degrees the mount is built around. It
+       can open past that but never close inside it, which is what keeps
+       the engine end in the picture on a frame as narrow as a phone held
+       upright without touching the shot on a wide screen. */
+    framePoints(0.45);
+    FIT[1].copy(SUB.base);
+    FIT[2].copy(SUB.base).addScaledVector(
+      SUB.axis, (mountH - (flown ? vehicle.userData.mvacY : 0)) * AFT_IN_SHOT);
+    FIT_N = 3;
+    SUB.rad = V.R + 1.0;              // the fairing is above the mount
+    SHOT.rides = true; SHOT.wheel = 1;
+    SHOT.fov = 62; SHOT.fill = 0.86; SHOT.lo = 62; SHOT.hi = 92;
+    SHOT.lam = 9;
+    SHOT.shakePos = 0.5; SHOT.shakeRot = 0.9;
+
+  } else {
+    /* --- FREE: a plain orbit the viewer drives, framed by the same
+       solver so the stack stays in the picture wherever it is dragged. */
+    SHOT.aim.copy(framePoints(0.45));
+    SHOT.dir.set(0.66, 0.34, 0.67).normalize();
+    SHOT.fly = true; SHOT.rides = true;
+    SHOT.fov = 36; SHOT.fill = 0.60; SHOT.lo = 26; SHOT.hi = 64;
+    SHOT.lam = 4;
+    SHOT.shakePos = 0.25; SHOT.shakeRot = 0.4;
+  }
+
+  /* An operator is never perfectly still. The wander is scaled by the
+     subject's own length and applied before the lens is solved, so it
+     reads as a human hand and can never walk the vehicle out of frame. */
+  if (SHOT.drift > 0) {
+    const w = SHOT.drift * SUB.half;
+    SHOT.aim.x += fbm(now * 0.23) * w;
+    SHOT.aim.y += fbm(now * 0.19 + 12) * w;
+    SHOT.aim.z += fbm(now * 0.17 + 40) * w;
+  }
+
+  /* Fold every shot into one (aim, direction, distance) form so the
+     viewer's drag and the solver only have to understand one thing. */
+  let dist = CAM.dist;
+  if (!SHOT.fly) {
+    _e.subVectors(SHOT.pos, SHOT.aim);
+    dist = _e.length();
+    SHOT.dir.copy(_e).multiplyScalar(dist > 1e-6 ? 1 / dist : 0);
+    if (SHOT.wheel) dist *= CAM.orbitZoom;    // a fixed lens backs off instead
+  }
+
+  /* Viewer look-around: yaw about world up, pitch as an elevation offset.
+     The wheel scales how much of the frame the vehicle fills, so zooming
+     never fights the solver the way moving the eye would. */
+  if (CAM.orbitYaw || CAM.orbitPitch) {
+    const yaw = Math.atan2(SHOT.dir.x, SHOT.dir.z) + CAM.orbitYaw;
+    const pit = clamp(Math.asin(clamp(SHOT.dir.y, -1, 1)) + CAM.orbitPitch, -1.35, 1.40);
+    const cp = Math.cos(pit);
+    SHOT.dir.set(Math.sin(yaw) * cp, Math.sin(pit), Math.cos(yaw) * cp);
+  }
+  const fill = clamp(SHOT.wheel ? SHOT.fill : SHOT.fill / CAM.orbitZoom, 0.06, 0.95);
+
+  let fovWant = SHOT.fov;
+  if (SHOT.fly) {
+    /* Solve the standoff. Angular size falls off as 1/distance, so one
+       ratio step lands within a per cent and a second nails it; a cut
+       runs the loop out so the shot opens already framed. */
+    const want = Math.tan(clamp(SHOT.fov, SHOT.lo, SHOT.hi) * DEG * 0.5) * fill;
+    const near = SUB.half * 1.2 + 8;
+    if (!(dist > near)) dist = SUB.half * 6 + 60;
+    for (let i = cut ? 6 : 2; i > 0; i--) {
+      _eye.copy(SHOT.aim).addScaledVector(SHOT.dir, dist);
+      lookBasis(_eye, SHOT.aim);
+      let s = fitTan(_eye) / want;
+      if (fitBehind) s = Math.max(s, 1.7);
+      dist = clamp(dist * clamp(s, 0.45, 2.6), near, 40000);
+    }
+    CAM.dist = cut ? dist : damp(CAM.dist, dist, 3, dt);
+    SHOT.pos.copy(SHOT.aim).addScaledVector(SHOT.dir, CAM.dist);
+  } else {
+    SHOT.pos.copy(SHOT.aim).addScaledVector(SHOT.dir, dist);
+    if (SHOT.solve) {
+      // Locked off: hold the ground, open the lens instead.
+      lookBasis(SHOT.pos, SHOT.aim);
+      fovWant = 2 * Math.atan(fitTan(SHOT.pos) / fill) / DEG;
+    }
+  }
+  fovWant = clamp(fovWant, SHOT.lo, SHOT.hi);
+
+  // No shot is worth flying underground to get.
+  if (SHOT.pos.y < 2.5) SHOT.pos.y = 2.5;
+
+  /* Damp toward the framing, except across a cut, which must be instant
+     or the camera visibly flies between setups.
+
+     Before damping, the vehicle's own travel this frame is added to the
+     camera state: the aim always carries it, and the eye carries it too
+     for the shots that ride along. Only the framing offset is then left
+     to damp, so the shot has no steady-state lag however fast the stack
+     is going - a plain damped follow trails a target by v/lambda, which
+     at two kilometres a second is precisely what walks the vehicle off
+     the edge of the frame. Feeding the vehicle forward rather than the
+     framing also means the offset jumps at separation and at fairing
+     deploy still ease in, instead of popping the picture sideways. */
+  if (cut) {
+    CAM.pos.copy(SHOT.pos); CAM.target.copy(SHOT.aim); CAM.fov = fovWant;
+    CAM.guard = 0;
+  } else {
+    _e.subVectors(vehicle.position, CAM.anchor);
+    CAM.target.add(_e);
+    if (SHOT.rides) CAM.pos.add(_e);
+    const lam = SHOT.lam;
+    CAM.pos.x = damp(CAM.pos.x, SHOT.pos.x, lam, dt);
+    CAM.pos.y = damp(CAM.pos.y, SHOT.pos.y, lam, dt);
+    CAM.pos.z = damp(CAM.pos.z, SHOT.pos.z, lam, dt);
+    CAM.target.x = damp(CAM.target.x, SHOT.aim.x, lam, dt);
+    CAM.target.y = damp(CAM.target.y, SHOT.aim.y, lam, dt);
+    CAM.target.z = damp(CAM.target.z, SHOT.aim.z, lam, dt);
+    CAM.fov = damp(CAM.fov, fovWant, 4, dt);
+  }
+  CAM.anchor.copy(vehicle.position);
+
+  camera.position.copy(CAM.pos);
+  camera.lookAt(CAM.target);
+
+  /* --- shake ---------------------------------------------------------
+     Two independent sources:
+       acoustic  the pressure wave off the plume, 1/r with distance and
+                 delayed by the time of flight of sound
+       buffet    airframe vibration through max Q, felt only by the
+                 camera bolted to the vehicle                           */
+  const enginePt = _tmp.copy(vehicle.position);
+  const d = camera.position.distanceTo(enginePt);
+  const heard = acousticAt(d / 343);
+  const acou = heard * (70 / (70 + d)) * (1 - smoothstep(2000, 12000, FL.alt));
+
+  // Only the camera bolted to the airframe feels the buffet; the chase
+  // plate is two hundred metres off the flank and feels nothing.
+  const onboard = mode === 4 ? 1 : 0;
+  const buffet = onboard * (FL.qmax > 0 ? FL.q / 34000 : 0) * 0.9;
+
+  const amp = (acou * 1.25 + buffet);
+  if (amp > 0.002) {
+    const t = now;
+    _sv.set(fbm(t * 17.3), fbm(t * 19.7 + 31), fbm(t * 13.1 + 77) * 0.6)
+       .multiplyScalar(amp * SHOT.shakePos * 0.55)
+       .applyQuaternion(camera.quaternion);
+    camera.position.add(_sv);
+
+    // Angular shake is in camera-local axes, so a long lens magnifies it
+    // exactly the way a real telephoto tracking shot does.
+    const k = amp * SHOT.shakeRot * 0.0022;
+    camera.rotateX(fbm(t * 23.9 + 9) * k);
+    camera.rotateY(fbm(t * 21.1 + 3) * k);
+    camera.rotateZ(fbm(t * 11.7 + 5) * k * 0.7);
+  }
+
+  /* --- framing guard --------------------------------------------------
+     Last line of defence. Whatever the damping, the viewer's drag and
+     the shake have between them done to the frame, measure it once more
+     from where the camera actually ended up and open the lens if any
+     part of the vehicle has been pushed outside. It opens at once and
+     recovers slowly, so a transient cannot make the lens pump. */
+  let fov = CAM.fov;
+  if (SHOT.solve) {
+    _r.set(1, 0, 0).applyQuaternion(camera.quaternion);
+    _u.set(0, 1, 0).applyQuaternion(camera.quaternion);
+    _f.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    const need = 2 * Math.atan(fitTan(camera.position) / FRAME_GUARD) / DEG;
+    CAM.guard = Math.max(need - CAM.fov, damp(CAM.guard, 0, 1.6, dt));
+    fov = clamp(CAM.fov + Math.max(0, CAM.guard), SHOT.lo, SHOT.hi);
+  }
+  if (Math.abs(camera.fov - fov) > 0.001) {
+    camera.fov = fov;
+    camera.updateProjectionMatrix();
+  }
+
+  // The sky sphere rides with the camera so it can never be flown out of.
+  sky.position.copy(camera.position);
+
+  // Point sprites are sized in pixels, so the scale factor folds in both
+  // the current field of view and the drawing buffer height.
+  exhaustMat.uniforms.uScale.value =
+    renderer.domElement.height / (2 * Math.tan(camera.fov * Math.PI / 360));
+}
+
+/* --- adaptive quality -------------------------------------------------
+   Frame cost is watched over a moving window. If the machine cannot hold
+   the budget the particle spawn rate is cut first, then the engine
+   light's shadow pass, then the pixel ratio - cheapest visual loss
+   first. Recovery needs a longer good streak than the drop needed bad
+   frames, so it cannot oscillate. */
+let qAcc = 0, qFrames = 0, qGood = 0;
+
+function updateQuality(frameMs) {
+  qAcc += frameMs; qFrames++;
+  if (qFrames < 60) return;
+  const mean = qAcc / qFrames;
+  qAcc = 0; qFrames = 0;
+
+  if (mean > 26 && quality.level > 0) {
+    quality.level--;
+    qGood = 0;
+    applyQuality();
+  } else if (mean < 18) {
+    if (++qGood >= 6 && quality.level < 2) { quality.level++; qGood = 0; applyQuality(); }
+  } else {
+    qGood = 0;
+  }
+}
+
+function applyQuality() {
+  if (quality.level === 2) {
+    quality.spawn = 1; quality.engineShadow = true;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  } else if (quality.level === 1) {
+    quality.spawn = 0.6; quality.engineShadow = true;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.35));
+  } else {
+    quality.spawn = 0.35; quality.engineShadow = false;
+    renderer.setPixelRatio(1);
+  }
+  renderer.setSize(window.innerWidth, window.innerHeight, false);
+}
+
+/* -- 11 -- HUD, input and the main loop ------------------------------- */
+
+const SEQ_SHOW = {
+  ignition: 'T-00:02', liftoff: 'T+00:00', pitch: 'T+00:12', maxq: 'T+01:12',
+  meco: 'T+02:37', sep: 'T+02:41', ses1: 'T+02:44', fairing: 'T+03:15',
+  seco: 'T+09:02'
+};
+
+const seqEl = $('seq');
+const seqRows = Object.create(null);
+for (const s of SEQUENCE) {
+  const li = document.createElement('li');
+  li.innerHTML = '<span class="at">' + SEQ_SHOW[s.key] + '</span><span class="nm"></span>';
+  li.lastChild.textContent = s.label;
+  seqEl.appendChild(li);
+  seqRows[s.key] = li;
+}
+
+let calloutTimer = 0;
+function showCallout(text, hot) {
+  const el = $('callout');
+  el.textContent = text;
+  el.classList.toggle('hot', !!hot);
+  el.classList.add('show');
+  clearTimeout(calloutTimer);
+  calloutTimer = setTimeout(() => el.classList.remove('show'), 2600);
+}
+
+function markSequence(key) {
+  const li = seqRows[key];
+  if (!li) return;
+  li.className = 'now';
+  li.firstChild.textContent = fmtMET(FL.t, true);
+  for (const k in seqRows) if (k !== key && seqRows[k].className === 'now') seqRows[k].className = 'done';
+}
+
+/* --- formatting ------------------------------------------------------ */
+function fmtMET(t, short) {
+  const sign = t < 0 ? '-' : '+';
+  const a = Math.abs(t);
+  const h = Math.floor(a / 3600), m = Math.floor(a / 60) % 60, s = Math.floor(a % 60);
+  const p = (n) => String(n).padStart(2, '0');
+  return short ? 'T' + sign + p(m) + ':' + p(s)
+               : 'T' + sign + p(h) + ':' + p(m) + ':' + p(s);
+}
+/* Thin-space grouping keeps long figures readable without a comma that
+   would fight the tabular alignment. */
+function group(n) {
+  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+function unit(v, u) { return v + '<u>' + u + '</u>'; }
+
+const meterEl = $('meter');
+for (let i = 0; i < 10; i++) meterEl.appendChild(document.createElement('i'));
+const meterSegs = meterEl.children;
+
+let hudAcc = 0;
+function updateHUD(dt) {
+  hudAcc += dt;
+  if (hudAcc < 0.08) return;     // 12 Hz is plenty and avoids layout churn
+  hudAcc = 0;
+
+  $('met').textContent = fmtMET(FL.t, false);
+
+  let phase = 'Terminal count';
+  if (FL.fired.seco) phase = 'Orbit insertion complete';
+  else if (FL.stage === 2) phase = 'Stage 2 ascent';
+  else if (FL.sepT !== null) phase = 'Coast to ignition';
+  else if (FL.mecoT !== null) phase = 'Post MECO coast';
+  else if (FL.t >= 0) phase = 'Stage 1 ascent';
+  else if (FL.t >= IGNITION_T) phase = 'Ignition - clamps engaged';
+  $('phase').textContent = phase;
+
+  $('alt').innerHTML = FL.alt < 1000
+    ? unit(group(FL.alt), 'm')
+    : unit((FL.alt / 1000).toFixed(FL.alt < 100000 ? 1 : 0), 'km');
+  $('spd').innerHTML = unit(group(FL.vmag * 3.6), 'km/h');
+  $('dr').innerHTML  = unit((FL.down / 1000).toFixed(1), 'km');
+  $('mach').textContent = FL.mach.toFixed(2);
+  $('qbar').innerHTML = unit((FL.q / 1000).toFixed(1), 'kPa');
+  $('thr').innerHTML = unit(Math.round(FL.throttle * 100), '%');
+  $('gee').innerHTML = unit(FL.gLoad.toFixed(2), 'g');
+
+  const lit = Math.round(FL.throttle * 10);
+  for (let i = 0; i < 10; i++) meterSegs[i].className = i < lit ? 'lit' : '';
+}
+
+/* --- reset ------------------------------------------------------------
+   Anything that gets re-parented during flight has its original parent
+   and local transform recorded up front, so a reset is exact rather than
+   a rebuild. */
+const RESET_T = [];
+function remember(obj) {
+  RESET_T.push({
+    obj, parent: obj.parent,
+    p: obj.position.clone(), e: obj.rotation.clone(), s: obj.scale.clone()
+  });
+}
+remember(stage1);
+remember(fairingHalves[0]);
+remember(fairingHalves[1]);
+
+function resetFlight() {
+  Object.assign(FL, {
+    running: false, t: -10, alt: 0, down: 0, vx: 0, vy: 0,
+    pitch: 0, roll: 0, mass: P.m0, prop1: P.m1_prop, prop2: P.m2_prop,
+    throttle: 0, thrust: 0, q: 0, qmax: 0, mach: 0, gLoad: 0, vmag: 0,
+    stage: 1, fairingOn: true, fired: Object.create(null),
+    mecoT: null, sepT: null
+  });
+
+  debris.length = 0;
+  for (const r of RESET_T) {
+    r.parent.add(r.obj);                 // add() re-parents in LOCAL space
+    r.obj.position.copy(r.p);
+    r.obj.rotation.set(r.e.x, r.e.y, r.e.z);
+    r.obj.scale.copy(r.s);
+  }
+
+  exhaust.clear();
+  acoustic.fill(0);
+  renderer.shadowMap.autoUpdate = true;
+  renderer.shadowMap.needsUpdate = true;
+  jetUniforms.uThrottle.value = 0;
+  flashSprite.scale.setScalar(0.01);
+  renderer.toneMappingExposure = 1;
+
+  CAM.last = -1;                         // force a hard cut on the next frame
+  CAM.orbitYaw = CAM.orbitPitch = 0; CAM.orbitZoom = 1;
+
+  for (const k in seqRows) {
+    seqRows[k].className = '';
+    seqRows[k].firstChild.textContent = SEQ_SHOW[k];
+  }
+  $('callout').classList.remove('show');
+  updatePad(0);
+  placeVehicle(0);
+}
+
+/* --- input ------------------------------------------------------------ */
+let timeScale = 1;
+let started = false;
+
+function begin() {
+  if (!started) {
+    started = true;
+    $('start').classList.add('gone');
+    $('hud').classList.add('live');
+    setTimeout(() => { $('start').hidden = true; }, 800);
+  }
+  FL.running = true;
+}
+
+function setCam(mode) {
+  CAM.mode = mode;
+  CAM.orbitYaw = CAM.orbitPitch = 0;
+  for (const b of document.querySelectorAll('[data-cam]')) {
+    b.classList.toggle('on', Number(b.dataset.cam) === mode);
+  }
+}
+function setRate(r) {
+  timeScale = r;
+  for (const b of document.querySelectorAll('[data-rate]')) {
+    b.classList.toggle('on', Number(b.dataset.rate) === r);
+  }
+}
+
+$('go').addEventListener('click', begin);
+$('reset').addEventListener('click', () => { resetFlight(); begin(); });
+for (const b of document.querySelectorAll('[data-cam]')) {
+  b.addEventListener('click', () => setCam(Number(b.dataset.cam)));
+}
+for (const b of document.querySelectorAll('[data-rate]')) {
+  b.addEventListener('click', () => setRate(Number(b.dataset.rate)));
+}
+
+const RATES = [0.25, 0.5, 1, 2, 4, 8, 16];
+window.addEventListener('keydown', (e) => {
+  if (e.key === ' ') { e.preventDefault(); begin(); }
+  else if (e.key >= '0' && e.key <= '5') setCam(Number(e.key));
+  else if (e.key === 'r' || e.key === 'R') { resetFlight(); begin(); }
+  else if (e.key === '-' || e.key === '_') {
+    setRate(RATES[Math.max(0, RATES.indexOf(timeScale) - 1)] || 0.25);
+  } else if (e.key === '=' || e.key === '+') {
+    setRate(RATES[Math.min(RATES.length - 1, RATES.indexOf(timeScale) + 1)]);
+  }
+});
+
+/* Drag to look around, wheel to pull back. */
+let dragging = false, lastX = 0, lastY = 0;
+canvas.addEventListener('pointerdown', (e) => {
+  dragging = true; lastX = e.clientX; lastY = e.clientY;
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  CAM.orbitYaw   -= (e.clientX - lastX) * 0.005;
+  CAM.orbitPitch += (e.clientY - lastY) * 0.004;
+  CAM.orbitPitch = clamp(CAM.orbitPitch, -1.2, 1.2);
+  lastX = e.clientX; lastY = e.clientY;
+});
+const endDrag = () => { dragging = false; };
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  CAM.orbitZoom = clamp(CAM.orbitZoom * (1 + Math.sign(e.deltaY) * 0.12), 0.25, 5);
+}, { passive: false });
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight, false);
+});
+
+/* --- main loop --------------------------------------------------------
+   Physics runs on a fixed 1/120 s step inside an accumulator, so the
+   trajectory is identical at 30 fps, 60 fps or 144 fps and does not
+   change when the time rate is turned up. Rendering, particles and the
+   camera all run on the real frame delta.                              */
+const FIXED = 1 / 120;
+let acc = 0, prev = performance.now(), simClock = 0;
+
+function frame(now) {
+  requestAnimationFrame(frame);
+
+  const raw = Math.min(0.1, (now - prev) / 1000);
+  prev = now;
+  const dt = raw * timeScale;
+  simClock += dt;
+
+  if (FL.running) {
+    acc += dt;
+    let guard = 0;
+    while (acc >= FIXED && guard++ < 600) { step(FIXED); acc -= FIXED; }
+    if (acc > FIXED) acc = 0;          // the tab was backgrounded; do not catch up
+  }
+
+  updatePad(dt);
+  placeVehicle(simClock);
+
+  // Particles are given a capped step: at 16x nothing useful is gained by
+  // integrating a quarter-second of smoke in one go, and the plume stays
+  // stable instead of tearing itself apart.
+  const pdt = Math.min(0.06, dt);
+  emitExhaust(pdt, simClock);
+  exhaust.update(pdt, {
+    impactY: FL.alt < 45 ? 2.6 : 0.4,
+    padFlow: FL.alt < 45 ? 1 : 0
+  });
+
+  updateEngineLight(simClock);
+  pushAcoustic(dt, FL.throttle);
+  updateCamera(raw, simClock);
+  updateSky(FL.alt);
+  updateHUD(raw);
+
+  renderer.render(scene, camera);
+  updateQuality(raw * 1000);
+}
+
+/* --- go --------------------------------------------------------------- */
+setCam(0);
+setRate(1);
+resetFlight();
+updateSky(0);
+updateCamera(0.016, 0);
+requestAnimationFrame(frame);
+</script>
+<!-- ARTIFACT-SCRIPT-END -->
+</body>
+</html>
